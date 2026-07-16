@@ -1,0 +1,84 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: kherad
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ingest:
+    build:
+      context: ./apps/ingest
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: 4100
+    ports:
+      - "4100:4100"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4100/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: 4000
+      HOST: 0.0.0.0
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/kherad
+      GIT_REPO_PATH: /data/git-repo
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      GIT_REMOTE_SECRET_KEY: ${GIT_REMOTE_SECRET_KEY:-dev-remote-secret-change-me}
+      INGEST_SERVICE_URL: http://ingest:4100
+    ports:
+      - "4000:4000"
+    volumes:
+      # Bind-mount so a locally-run web app (`pnpm --filter web dev`) and the
+      # Docker API share one bare repo. A named volume here caused silent
+      # split-brain: uploads/merges landed in Docker while wiki/assets read
+      # apps/api/data/git-repo on the host.
+      - ./apps/api/data/git-repo:/data/git-repo
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ingest:
+        condition: service_started
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/kherad
+      GIT_REPO_PATH: /data/git-repo
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      NEXT_PUBLIC_API_URL: http://localhost:4000
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./apps/api/data/git-repo:/data/git-repo
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+volumes:
+  postgres_data:

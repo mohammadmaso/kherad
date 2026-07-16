@@ -1,0 +1,164 @@
+@import "tailwindcss";
+@import "@kherad/ui/globals.css";
+
+@source "../../../../packages/ui/src";
+/* Streamdown (chat markdown renderer) styles itself with Tailwind classes —
+   they must be part of this app's scan or streamed answers render unstyled. */
+@source "../../node_modules/streamdown/dist/*.js";
+
+/* ---- Localization / RTL ------------------------------------------------- */
+
+/* Vazirmatn sits behind Geist as the Arabic-script fallback in the English UI,
+   and takes over as the primary face when the UI language is Persian. */
+:root {
+  --font-sans: var(--font-geist-sans), var(--font-vazirmatn), ui-sans-serif, system-ui, sans-serif;
+}
+html[lang="fa"] {
+  --font-sans: var(--font-vazirmatn), var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Arabic script is cursive: any letter-spacing (including the negative
+   heading tracking in the design tokens) visibly breaks glyph joining, so the
+   Persian UI zeroes tracking wholesale. Unlayered on purpose — it must win
+   over the layered utility classes. */
+html[lang="fa"],
+html[lang="fa"] * {
+  letter-spacing: 0;
+}
+
+/* ---- UI font preference -------------------------------------------------- */
+
+/* `data-font` is stamped on <html> by the appearance provider; the default
+   (Geist) keeps the stacks above. Declared after the lang rules so a chosen
+   font wins in both locales; Vazirmatn stays in every stack as the
+   Arabic-script fallback. */
+html[data-font="system"] {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, var(--font-vazirmatn), sans-serif;
+}
+html[data-font="serif"] {
+  --font-sans: ui-serif, Georgia, "Times New Roman", var(--font-vazirmatn), serif;
+}
+
+/* Conflict-marker highlighting for the manager-only resolution editor (Monaco decorations). */
+.conflict-marker-line {
+  background-color: color-mix(in oklch, var(--color-amber-500, #f59e0b) 18%, transparent);
+}
+.conflict-marker-text {
+  font-weight: 600;
+}
+.conflict-ours-line {
+  background-color: color-mix(in oklch, var(--destructive) 12%, transparent);
+}
+.conflict-theirs-line {
+  background-color: color-mix(in oklch, oklch(0.72 0.19 149), transparent 88%);
+}
+
+/* ---- Lexical editor ---------------------------------------------------- */
+
+/* Check lists: the box is drawn on the list item's ::before, and CheckListPlugin
+   toggles state on pointer-down in the item's start padding. */
+.editor-checklist {
+  list-style: none;
+  padding-inline-start: 0.25rem;
+}
+.editor-li-checked,
+.editor-li-unchecked {
+  position: relative;
+  list-style: none;
+  padding-inline-start: 1.625rem;
+  outline: none;
+}
+.editor-li-checked {
+  color: var(--muted-foreground);
+  text-decoration: line-through;
+}
+.editor-li-checked::before,
+.editor-li-unchecked::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0.125rem;
+  top: 0.28em;
+  width: 1rem;
+  height: 1rem;
+  cursor: pointer;
+  border-radius: 0.3rem;
+  border: 1px solid var(--input);
+  background: var(--background);
+  transition:
+    background-color 100ms ease-out,
+    border-color 100ms ease-out;
+}
+.editor-li-checked::before {
+  border-color: var(--primary);
+  background: var(--primary);
+}
+.editor-li-checked::after {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0.5rem;
+  top: calc(0.28em + 0.175rem);
+  width: 0.3rem;
+  height: 0.55rem;
+  cursor: pointer;
+  border: solid var(--primary-foreground);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* Divider (horizontal rule) */
+.editor-hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.25rem 0;
+  cursor: pointer;
+}
+.editor-hr.selected {
+  border-radius: 2px;
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+}
+
+/* Code-block syntax highlighting (Prism token classes mapped in the editor theme). */
+.editor-token-comment {
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+.editor-token-punctuation {
+  color: var(--muted-foreground);
+}
+.editor-token-property {
+  color: oklch(0.52 0.13 230);
+}
+.editor-token-selector {
+  color: oklch(0.52 0.13 150);
+}
+.editor-token-operator {
+  color: oklch(0.55 0.11 60);
+}
+.editor-token-attr {
+  color: oklch(0.5 0.16 290);
+}
+.editor-token-variable {
+  color: oklch(0.55 0.14 40);
+}
+.editor-token-function {
+  color: oklch(0.52 0.17 330);
+}
+.dark .editor-token-property {
+  color: oklch(0.75 0.11 230);
+}
+.dark .editor-token-selector {
+  color: oklch(0.76 0.11 150);
+}
+.dark .editor-token-operator {
+  color: oklch(0.76 0.09 60);
+}
+.dark .editor-token-attr {
+  color: oklch(0.73 0.13 290);
+}
+.dark .editor-token-variable {
+  color: oklch(0.76 0.11 40);
+}
+.dark .editor-token-function {
+  color: oklch(0.74 0.14 330);
+}

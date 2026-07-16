@@ -1,0 +1,288 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  /* Critically-damped spring approximation (damping 1.0) — the default for UI that settles
+     without overshoot. Reserve bounce/overshoot curves for gesture-driven motion only. */
+  --ease-out-spring: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out-spring: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  color-scheme: light;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.49 0.16 262);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.96 0.01 262);
+  --accent-foreground: oklch(0.3 0.06 262);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.6 0.12 262);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.49 0.16 262);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+  /* Native UI (select popups, scrollbars, form controls) must follow the
+     class-based theme, not just the OS preference. */
+  color-scheme: dark;
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.68 0.14 262);
+  --primary-foreground: oklch(0.145 0.02 262);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.28 0.03 262);
+  --accent-foreground: oklch(0.9 0.03 262);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.55 0.11 262);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+/* ---- Accent themes ------------------------------------------------------ */
+/* Per-user accent choice, stamped as `data-accent` on <html> by the appearance
+   provider in apps/web. Each theme re-tints only the accent-carrying tokens
+   (primary/accent/ring/sidebar-primary); neutrals stay shared so surfaces and
+   text render identically across accents. The default (indigo, hue 262) lives
+   in :root/.dark above. L/C values mirror the default's so every accent keeps
+   the same contrast against --background in both color schemes. */
+
+[data-accent="forest"] {
+  --primary: oklch(0.47 0.12 152);
+  --accent: oklch(0.96 0.015 152);
+  --accent-foreground: oklch(0.28 0.06 152);
+  --ring: oklch(0.58 0.11 152);
+  --sidebar-primary: oklch(0.47 0.12 152);
+}
+.dark[data-accent="forest"] {
+  --primary: oklch(0.7 0.13 152);
+  --primary-foreground: oklch(0.16 0.03 152);
+  --accent: oklch(0.28 0.03 152);
+  --accent-foreground: oklch(0.9 0.05 152);
+  --ring: oklch(0.55 0.1 152);
+  --sidebar-primary: oklch(0.7 0.13 152);
+}
+
+[data-accent="plum"] {
+  --primary: oklch(0.5 0.15 320);
+  --accent: oklch(0.96 0.015 320);
+  --accent-foreground: oklch(0.3 0.07 320);
+  --ring: oklch(0.6 0.12 320);
+  --sidebar-primary: oklch(0.5 0.15 320);
+}
+.dark[data-accent="plum"] {
+  --primary: oklch(0.72 0.14 320);
+  --primary-foreground: oklch(0.17 0.04 320);
+  --accent: oklch(0.29 0.04 320);
+  --accent-foreground: oklch(0.9 0.05 320);
+  --ring: oklch(0.56 0.11 320);
+  --sidebar-primary: oklch(0.72 0.14 320);
+}
+
+[data-accent="ember"] {
+  --primary: oklch(0.53 0.13 50);
+  --accent: oklch(0.96 0.02 60);
+  --accent-foreground: oklch(0.32 0.07 50);
+  --ring: oklch(0.62 0.12 55);
+  --sidebar-primary: oklch(0.53 0.13 50);
+}
+.dark[data-accent="ember"] {
+  --primary: oklch(0.75 0.13 55);
+  --primary-foreground: oklch(0.2 0.05 50);
+  --accent: oklch(0.3 0.04 55);
+  --accent-foreground: oklch(0.92 0.06 70);
+  --ring: oklch(0.6 0.11 55);
+  --sidebar-primary: oklch(0.75 0.13 55);
+}
+
+/* ---- Text size ----------------------------------------------------------- */
+/* Root font-size steps; the whole layout tracks it because spacing is in rem.
+   15px / 16px / 17px equivalents. */
+html[data-text-size="compact"] {
+  font-size: 93.75%;
+}
+html[data-text-size="comfortable"] {
+  font-size: 106.25%;
+}
+
+/* Ease the dark↔light brightness jump instead of hard-cutting it: the
+   appearance provider holds this class on <html> for ~300ms around a theme
+   flip. Gated on no-preference so it can never outrank the reduced-motion
+   kill-switch below. */
+@media (prefers-reduced-motion: no-preference) {
+  html.theme-transitioning,
+  html.theme-transitioning *,
+  html.theme-transitioning ::before,
+  html.theme-transitioning ::after {
+    transition:
+      background-color 250ms ease,
+      color 250ms ease,
+      border-color 250ms ease,
+      fill 250ms ease,
+      stroke 250ms ease !important;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+
+  /* Type scale: tracking and leading move opposite to size (tight+negative at display sizes,
+     loose+near-zero at body/small sizes) rather than one fixed value everywhere. */
+  h1 {
+    @apply text-3xl leading-[1.1] font-semibold tracking-[-0.02em] text-balance;
+  }
+  h2 {
+    @apply text-2xl leading-[1.15] font-semibold tracking-[-0.015em] text-balance;
+  }
+  h3 {
+    @apply text-lg leading-[1.25] font-semibold tracking-[-0.01em];
+  }
+  p {
+    @apply leading-relaxed;
+  }
+}
+
+@layer components {
+  /* The one raised content surface: solid card, hairline border, soft shadow. Interactive
+     cards add `.surface-card-interactive` for the hover lift. */
+  .surface-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    box-shadow: 0 1px 2px oklch(0 0 0 / 5%);
+  }
+  .surface-card-interactive {
+    transition:
+      border-color 150ms ease,
+      box-shadow 200ms var(--ease-out-spring);
+  }
+  .surface-card-interactive:hover {
+    border-color: color-mix(in oklch, var(--primary), transparent 55%);
+    box-shadow: 0 2px 8px -2px oklch(0 0 0 / 10%);
+  }
+
+  /* Opt-in display size for hero/marketing headings — larger than the default h1 scale, so it
+     gets its own (more negative) tracking rather than reusing the h1 token. */
+  .text-display {
+    @apply font-semibold text-balance;
+    font-size: clamp(2.25rem, 4vw + 1rem, 3.75rem);
+    line-height: 1.05;
+    letter-spacing: -0.03em;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Translucent "material" surfaces (toolbars, dialogs) opt in with [data-materialize] so they
+   fall back to a solid, blur-free background when the user has asked for less transparency. */
+@media (prefers-reduced-transparency: reduce) {
+  [data-materialize] {
+    background-color: var(--background) !important;
+    backdrop-filter: none !important;
+  }
+}

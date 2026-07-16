@@ -1,0 +1,1 @@
+CREATE INDEX "search_index_tsv_idx" ON "search_index" USING gin ("tsv");

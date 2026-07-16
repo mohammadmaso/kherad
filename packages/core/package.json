@@ -1,0 +1,44 @@
+{
+  "name": "@kherad/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./auth": "./src/auth/index.ts",
+    "./binary-conflict": "./src/binary-conflict.ts",
+    "./git": "./src/git/index.ts",
+    "./page-paths": "./src/page-paths.ts",
+    "./markdown": "./src/markdown/index.ts",
+    "./permissions": "./src/permissions/index.ts",
+    "./search": "./src/search/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "check-types": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@kherad/db": "workspace:*",
+    "argon2": "^0.41.1",
+    "diff3": "0.0.3",
+    "drizzle-orm": "^0.38.3",
+    "isomorphic-git": "^1.38.7",
+    "jose": "^5.10.0",
+    "rehype-raw": "^7.0.0",
+    "rehype-stringify": "^10.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
+    "remark-rehype": "^11.1.2",
+    "shiki": "^1.29.2",
+    "unified": "^11.0.5",
+    "unist-util-visit": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/diff3": "^0.0.2",
+    "@types/hast": "^3.0.4",
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

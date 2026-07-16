@@ -1,0 +1,36 @@
+{
+  "name": "api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file=.env src/index.ts",
+    "build": "tsup",
+    "start": "node dist/index.js",
+    "lint": "eslint .",
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.15",
+    "@ai-sdk/openai-compatible": "^3.0.11",
+    "@fastify/cors": "^11.3.0",
+    "@fastify/multipart": "^10.1.0",
+    "@kherad/core": "workspace:*",
+    "@kherad/db": "workspace:*",
+    "@mastra/ai-sdk": "^1.6.2",
+    "@mastra/core": "^1.51.0",
+    "ai": "^7.0.29",
+    "argon2": "^0.41.1",
+    "drizzle-orm": "^0.38.3",
+    "fastify": "^5.2.1",
+    "gray-matter": "^4.0.3",
+    "isomorphic-git": "^1.38.7",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
