@@ -1,6 +1,26 @@
-# Kherad
+<div align="center">
+  <img src="docs/brand/logo.svg" alt="Kherad logo" width="96" height="96">
 
-**A Notion-like wiki for non-technical teams, backed by real git commits and a merge-request review workflow — plus AI agents that write the first draft for you.**
+  <h1>Kherad</h1>
+
+  <p><strong>A Notion-like wiki for non-technical teams, backed by real git commits and a merge-request review workflow — plus AI agents that write the first draft for you.</strong></p>
+
+  <p>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License: Apache 2.0"></a>
+    <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white" alt="TypeScript strict"></a>
+    <a href="https://nextjs.org/"><img src="https://img.shields.io/badge/Next.js-16-black?logo=next.js&logoColor=white" alt="Next.js 16"></a>
+    <a href="https://fastify.dev/"><img src="https://img.shields.io/badge/Fastify-API-000000?logo=fastify&logoColor=white" alt="Fastify"></a>
+    <a href="https://turborepo.com/"><img src="https://img.shields.io/badge/monorepo-Turborepo-EF4444?logo=turborepo&logoColor=white" alt="Turborepo"></a>
+    <a href="https://pnpm.io/"><img src="https://img.shields.io/badge/pnpm-10-F69220?logo=pnpm&logoColor=white" alt="pnpm 10"></a>
+  </p>
+
+  <p>
+    <a href="#features">Features</a> ·
+    <a href="#screenshots">Screenshots</a> ·
+    <a href="#architecture">Architecture</a> ·
+    <a href="#getting-started">Getting Started</a>
+  </p>
+</div>
 
 Kherad is a self-hosted, git-backed knowledge base. Authors get a block editor that feels like Notion or Google Docs; under the hood, every save is a real commit, every publish goes through review, and the full history is never lost. Non-technical writers never see the words "branch" or "merge" — reviewers are the only ones who ever touch that layer, and only when resolving a conflict.
 

@@ -9,6 +9,7 @@ import {
   DropdownMenuTrigger,
 } from "@kherad/ui/components/ui/dropdown-menu";
 import {
+  BrainIcon,
   CheckIcon,
   ChevronDownIcon,
   GlobeIcon,
@@ -136,8 +137,8 @@ export function Header() {
           href={user ? "/dashboard" : "/"}
           className="flex items-center gap-2 text-sm font-semibold tracking-tight"
         >
-          <span className="bg-primary text-primary-foreground flex size-6 items-center justify-center rounded-md text-[0.7rem] font-bold shadow-sm">
-            K
+          <span className="bg-primary text-primary-foreground flex size-6 items-center justify-center rounded-md shadow-sm">
+            <BrainIcon className="size-3.5" strokeWidth={2.25} />
           </span>
           {t.common.appName}
         </Link>
