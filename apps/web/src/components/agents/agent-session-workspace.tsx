@@ -17,6 +17,7 @@ import { Select } from "@kherad/ui/components/ui/select";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import {
   ArrowLeft,
+  BriefcaseIcon,
   FileTextIcon,
   PaperclipIcon,
   SparklesIcon,
@@ -24,7 +25,7 @@ import {
   UploadIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AskQuestionCard, extractAskQuestions } from "@/components/agents/ask-question-card";
@@ -35,17 +36,26 @@ import {
 } from "@/components/ai-elements/conversation";
 import { Loader } from "@/components/ai-elements/loader";
 import { Message, MessageContent } from "@/components/ai-elements/message";
+import {
+  hasVisibleAssistantContent,
+  MessageParts,
+} from "@/components/ai-elements/message-parts";
 import { PromptInput } from "@/components/ai-elements/prompt-input";
-import { Response } from "@/components/ai-elements/response";
+import {
+  buildMentionMessageParts,
+  MessageMentionChips,
+  type MentionPage,
+} from "@/components/chat/page-mentions";
 import {
   API_URL,
-  deleteInterviewerUpload,
-  fetchInterviewerBundles,
-  fetchInterviewerSession,
+  deleteAgentUpload,
+  fetchAgentBundles,
+  fetchAgentSession,
+  fetchBundlePages,
   getToken,
-  importInterviewerDraft,
-  updateInterviewerSession,
-  uploadInterviewerFile,
+  importAgentDraft,
+  updateAgentSession,
+  uploadAgentFile,
   type AgentBundleOption,
   type AgentSession,
   type AgentUpload,
@@ -53,8 +63,12 @@ import {
 import { useI18n } from "@/lib/i18n/provider";
 import { pagePathFromTitle } from "@kherad/core/page-paths";
 
-export default function InterviewerSessionPage() {
-  const { sessionId } = useParams<{ sessionId: string }>();
+// The specialist researches across bundles, so its picker offers pages from
+// every viewable bundle — capped to keep the lazy fetch bounded.
+const MAX_MENTION_BUNDLES = 20;
+
+/** Chat + draft workspace for a specialist agent session. */
+export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
   const { t } = useI18n();
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -63,6 +77,7 @@ export default function InterviewerSessionPage() {
   const [uploads, setUploads] = useState<AgentUpload[]>([]);
   const [draft, setDraft] = useState("");
   const [bundles, setBundles] = useState<AgentBundleOption[]>([]);
+  const [mentionPages, setMentionPages] = useState<MentionPage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [draftSaving, setDraftSaving] = useState(false);
@@ -79,8 +94,16 @@ export default function InterviewerSessionPage() {
   } | null>(null);
   const [answeredToolKeys, setAnsweredToolKeys] = useState<Set<string>>(new Set());
 
+  const labels = {
+    chatTitle: t.agents.specialistChatTitle,
+    chatEmpty: t.agents.specialistChatEmpty,
+    chatPlaceholder: t.agents.specialistChatPlaceholder,
+    thinking: t.agents.specialistThinking,
+    defaultTitle: "Specialist session",
+  };
+
   const reloadSession = useCallback(async () => {
-    const data = await fetchInterviewerSession(sessionId);
+    const data = await fetchAgentSession(sessionId);
     setSession(data.session);
     setUploads(data.uploads);
     setDraft(data.session.draftMarkdown ?? "");
@@ -91,7 +114,7 @@ export default function InterviewerSessionPage() {
   const transport = useMemo(
     () =>
       new DefaultChatTransport({
-        api: `${API_URL}/agents/interviewer/sessions/${sessionId}/chat`,
+        api: `${API_URL}/agents/sessions/${sessionId}/chat`,
         headers: (): Record<string, string> => {
           const token = getToken();
           return token ? { Authorization: `Bearer ${token}` } : {};
@@ -112,10 +135,7 @@ export default function InterviewerSessionPage() {
         return;
       }
       try {
-        const [data, bundleRows] = await Promise.all([
-          reloadSession(),
-          fetchInterviewerBundles(),
-        ]);
+        const [data, bundleRows] = await Promise.all([reloadSession(), fetchAgentBundles()]);
         if (cancelled) return;
         setBundles(bundleRows);
         setMessages(
@@ -141,6 +161,40 @@ export default function InterviewerSessionPage() {
       cancelled = true;
     };
   }, [reloadSession, router, sessionId, setMessages, t.agents.forbidden, t.agents.loadFailed]);
+
+  // Pages for the "@" mention picker — the specialist researches across every
+  // bundle the user can view, so offer pages from all of them.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const scope = bundles.slice(0, MAX_MENTION_BUNDLES);
+        if (scope.length === 0) {
+          setMentionPages([]);
+          return;
+        }
+        const perBundle = await Promise.all(
+          scope.map(async (bundle) => {
+            const pages = await fetchBundlePages(bundle.id).catch(() => []);
+            return pages
+              .filter((page) => !page.isDeleted && !page.redirectTo)
+              .map((page) => ({
+                bundleSlug: bundle.slug,
+                path: page.path,
+                title: page.title,
+                bundleTitle: bundle.title,
+              }));
+          }),
+        );
+        if (!cancelled) setMentionPages(perBundle.flat());
+      } catch {
+        // Mentions are an enhancement; the chat works without them.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bundles]);
 
   // When propose_document finishes, mirror its markdown into the draft panel.
   useEffect(() => {
@@ -191,7 +245,7 @@ export default function InterviewerSessionPage() {
 
   async function handleUpload(file: File) {
     try {
-      const upload = await uploadInterviewerFile(sessionId, file);
+      const upload = await uploadAgentFile(sessionId, file);
       setUploads((prev) => [...prev, upload]);
     } catch (err) {
       setError(err instanceof Error ? err.message : t.agents.uploadFailed);
@@ -199,7 +253,7 @@ export default function InterviewerSessionPage() {
   }
 
   async function handleDeleteUpload(uploadId: string) {
-    await deleteInterviewerUpload(sessionId, uploadId);
+    await deleteAgentUpload(sessionId, uploadId);
     setUploads((prev) => prev.filter((u) => u.id !== uploadId));
   }
 
@@ -208,7 +262,7 @@ export default function InterviewerSessionPage() {
     setDraftSaved(false);
     setError(null);
     try {
-      const updated = await updateInterviewerSession(sessionId, { draftMarkdown: draft });
+      const updated = await updateAgentSession(sessionId, { draftMarkdown: draft });
       setSession(updated);
       setDraftSaved(true);
     } catch (err) {
@@ -223,8 +277,8 @@ export default function InterviewerSessionPage() {
     setError(null);
     try {
       // Persist latest edits before import.
-      await updateInterviewerSession(sessionId, { draftMarkdown: draft });
-      const result = await importInterviewerDraft(sessionId, {
+      await updateAgentSession(sessionId, { draftMarkdown: draft });
+      const result = await importAgentDraft(sessionId, {
         bundleId: importBundleId,
         title: importTitle.trim(),
         path: importPath.trim() || undefined,
@@ -252,8 +306,7 @@ export default function InterviewerSessionPage() {
   }
 
   function openImport() {
-    const titleGuess =
-      session?.title && session.title !== "Interview session" ? session.title : "";
+    const titleGuess = session?.title && session.title !== labels.defaultTitle ? session.title : "";
     setImportTitle(titleGuess);
     setImportPath(titleGuess ? pagePathFromTitle(titleGuess) : "");
     const editable = bundles.filter((b) => b.canEdit);
@@ -294,11 +347,23 @@ export default function InterviewerSessionPage() {
             {t.agents.title}
           </Link>
           <h1 className="truncate text-lg font-semibold tracking-tight">{session.title}</h1>
+          {session.role ? (
+            <p className="text-muted-foreground flex items-center gap-1 text-xs">
+              <BriefcaseIcon className="size-3" />
+              {session.role}
+            </p>
+          ) : null}
           {session.bundle ? (
             <p className="text-muted-foreground text-xs">
               {t.agents.attachBundle}: {session.bundle.title}
             </p>
           ) : null}
+          <p className="text-muted-foreground text-xs">
+            {t.agents.aggressivenessOptions[session.aggressiveness]}
+            {session.skills.length > 0
+              ? ` · ${session.skills.map((s) => s.name).join(", ")}`
+              : ""}
+          </p>
         </div>
         <Badge variant="secondary">
           {session.status === "draft_ready"
@@ -341,57 +406,57 @@ export default function InterviewerSessionPage() {
         {/* Chat column */}
         <div className="border-border flex min-h-0 flex-col overflow-hidden rounded-2xl border">
           <div className="border-border flex items-center gap-2 border-b px-3 py-2.5">
-            <SparklesIcon className="text-primary size-4" />
-            <span className="text-sm font-semibold">{t.agents.chatTitle}</span>
+            <BriefcaseIcon className="text-primary size-4" />
+            <span className="text-sm font-semibold">{labels.chatTitle}</span>
           </div>
 
           <div className="border-border flex flex-wrap items-center gap-2 border-b px-3 py-2">
-              <span className="text-muted-foreground text-xs font-medium">{t.agents.uploads}</span>
-              {uploads.map((upload) => (
-                <span
-                  key={upload.id}
-                  className="bg-muted inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs"
-                >
-                  <PaperclipIcon className="size-3" />
-                  <span className="max-w-28 truncate">{upload.filename}</span>
-                  <button
-                    type="button"
-                    className="text-muted-foreground hover:text-destructive"
-                    aria-label={t.common.remove}
-                    onClick={() => void handleDeleteUpload(upload.id)}
-                  >
-                    <Trash2Icon className="size-3" />
-                  </button>
-                </span>
-              ))}
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                onClick={() => fileInputRef.current?.click()}
+            <span className="text-muted-foreground text-xs font-medium">{t.agents.uploads}</span>
+            {uploads.map((upload) => (
+              <span
+                key={upload.id}
+                className="bg-muted inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs"
               >
-                <UploadIcon className="size-3.5" />
-                {t.agents.uploadAdd}
-              </Button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".md,.txt,.csv,.json,.markdown,.tsv,text/*,application/json"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  e.target.value = "";
-                  if (file) void handleUpload(file);
-                }}
-              />
-            </div>
+                <PaperclipIcon className="size-3" />
+                <span className="max-w-28 truncate">{upload.filename}</span>
+                <button
+                  type="button"
+                  className="text-muted-foreground hover:text-destructive"
+                  aria-label={t.common.remove}
+                  onClick={() => void handleDeleteUpload(upload.id)}
+                >
+                  <Trash2Icon className="size-3" />
+                </button>
+              </span>
+            ))}
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <UploadIcon className="size-3.5" />
+              {t.agents.uploadAdd}
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".md,.txt,.csv,.json,.markdown,.tsv,text/*,application/json"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (file) void handleUpload(file);
+              }}
+            />
+          </div>
 
           <Conversation>
             <ConversationContent>
               {messages.length === 0 ? (
                 <div className="text-muted-foreground m-auto flex max-w-72 flex-col items-center gap-2 py-10 text-center text-sm">
-                  <MessageIcon />
-                  {t.agents.chatEmpty}
+                  <SparklesIcon className="text-primary/60 size-6" />
+                  {labels.chatEmpty}
                 </div>
               ) : null}
               {messages.map((message, messageIndex) => {
@@ -404,12 +469,25 @@ export default function InterviewerSessionPage() {
                     from={message.role === "user" ? "user" : "assistant"}
                   >
                     <MessageContent from={message.role === "user" ? "user" : "assistant"}>
-                      {message.parts.map((part, i) =>
-                        part.type === "text" ? (
-                          <Response key={`${message.id}-${i}`}>{part.text}</Response>
-                        ) : null,
+                      {message.role === "user" ? (
+                        <MessageMentionChips parts={message.parts} />
+                      ) : null}
+                      {message.role === "assistant" ? (
+                        <MessageParts
+                          parts={message.parts}
+                          messageId={message.id}
+                          reasoningLabel={t.agents.reasoningLabel}
+                        />
+                      ) : (
+                        message.parts.map((part, i) =>
+                          part.type === "text" ? (
+                            <span key={`${message.id}-${i}`} className="whitespace-pre-wrap">
+                              {part.text}
+                            </span>
+                          ) : null,
+                        )
                       )}
-                      {isLastAssistant && !busy
+                      {isLastAssistant
                         ? questions.map((q) => {
                             const key = `${message.id}:${q.id}`;
                             if (answeredToolKeys.has(key)) return null;
@@ -430,7 +508,15 @@ export default function InterviewerSessionPage() {
                   </Message>
                 );
               })}
-              {status === "submitted" ? <Loader label={t.agents.thinking} /> : null}
+              {(() => {
+                const last = messages[messages.length - 1];
+                const lastAssistant = last?.role === "assistant" ? last : null;
+                const showThinking =
+                  status === "submitted" ||
+                  (status === "streaming" &&
+                    (!lastAssistant || !hasVisibleAssistantContent(lastAssistant.parts)));
+                return showThinking ? <Loader label={labels.thinking} /> : null;
+              })()}
               {chatError ? <p className="text-destructive text-xs">{t.chat.error}</p> : null}
             </ConversationContent>
             <ConversationScrollButton label={t.chat.scrollToBottom} />
@@ -439,11 +525,22 @@ export default function InterviewerSessionPage() {
           <div className="border-border border-t p-3">
             <p className="text-muted-foreground mb-1.5 text-[0.6875rem]">{t.agents.uploadHint}</p>
             <PromptInput
-              placeholder={t.agents.chatPlaceholder}
+              placeholder={labels.chatPlaceholder}
               submitLabel={t.chat.send}
               stopLabel={t.chat.stop}
               status={status}
-              onSubmit={(text) => void sendMessage({ text })}
+              mentionPages={mentionPages}
+              mentionLabels={{
+                add: t.chat.mentionAdd,
+                searchPlaceholder: t.chat.mentionSearch,
+                empty: t.chat.mentionEmpty,
+              }}
+              onSubmit={(text, mentions) =>
+                void sendMessage({
+                  role: "user",
+                  parts: buildMentionMessageParts(text, mentions),
+                })
+              }
               onStop={() => void stop()}
             />
           </div>
@@ -554,8 +651,4 @@ export default function InterviewerSessionPage() {
       </Dialog>
     </div>
   );
-}
-
-function MessageIcon() {
-  return <SparklesIcon className="text-primary/60 size-6" />;
 }

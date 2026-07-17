@@ -9,9 +9,17 @@ import {
   okfDocSitePath,
   okfGitPathPrefix,
 } from "../git/paths";
+import {
+  frontmatterToMetadata,
+  parseOkfFrontmatter,
+  stripFrontmatter,
+} from "../markdown/frontmatter";
 import { renderMarkdownToText } from "../markdown/to-text";
+import { deletePageEmbeddings, upsertPageEmbeddings, type Embedder } from "./embedding";
 
 type BundleRef = { id: string; slug: string; defaultBranch: string };
+
+const CONTENT_CAP = 50_000;
 
 /** Strips a diff entry's git path down to the raw page's own `path` column. */
 function pageSourcePath(bundleSlug: string, gitPath: string): string | null {
@@ -23,35 +31,45 @@ function pageSourcePath(bundleSlug: string, gitPath: string): string | null {
   return null;
 }
 
-/** Minimal YAML-frontmatter `title:` extraction, mirroring apps/web's OKF renderer. */
-function titleFromOkfMarkdown(markdown: string, fallback: string): string {
-  if (!markdown.startsWith("---")) return fallback;
-  const end = markdown.indexOf("\n---", 3);
-  if (end < 0) return fallback;
-  const fm = markdown.slice(3, end);
-  const match = /^title:\s*["']?(.+?)["']?\s*$/m.exec(fm);
-  return match?.[1]?.trim() || fallback;
-}
-
-function stripFrontmatter(markdown: string): string {
-  if (!markdown.startsWith("---")) return markdown;
-  const end = markdown.indexOf("\n---", 3);
-  if (end < 0) return markdown;
-  return markdown.slice(end + 4).replace(/^\n+/, "");
-}
-
-async function upsertSearchTsv(db: Database, pageId: string, title: string, markdown: string) {
+async function indexPage(
+  db: Database,
+  page: { id: string; title: string },
+  markdown: string,
+  metadata: Record<string, unknown> | null,
+  embedder?: Embedder | null,
+): Promise<void> {
   const text = await renderMarkdownToText(markdown);
   // Postgres text / to_tsvector reject NUL bytes; strip defensively in case a
   // bad blob was committed under a .md path.
-  const indexed = `${title}\n${text}`.replaceAll("\0", "");
+  const indexed = `${page.title}\n${text}`.replaceAll("\0", "");
+  const content = indexed.slice(0, CONTENT_CAP);
+
+  // english (stemmed) || simple (exact tokens) so Farsi and other non-English
+  // tokens match without relying on the english stemmer alone.
   await db
     .insert(schema.searchIndex)
-    .values({ pageId, tsv: sql`to_tsvector('english', ${indexed})` })
+    .values({
+      pageId: page.id,
+      tsv: sql`to_tsvector('english', ${indexed}) || to_tsvector('simple', ${indexed})`,
+      content,
+      metadata,
+    })
     .onConflictDoUpdate({
       target: schema.searchIndex.pageId,
-      set: { tsv: sql`to_tsvector('english', ${indexed})` },
+      set: {
+        tsv: sql`to_tsvector('english', ${indexed}) || to_tsvector('simple', ${indexed})`,
+        content,
+        metadata,
+      },
     });
+
+  if (embedder) {
+    try {
+      await upsertPageEmbeddings(db, embedder, page, page.title, markdown);
+    } catch (err) {
+      console.error(`[search] embedding failed for page ${page.id}:`, err);
+    }
+  }
 }
 
 /**
@@ -70,6 +88,7 @@ export async function refreshSearchIndexForMerge(
   bundle: BundleRef,
   beforeOid: string,
   afterOid: string,
+  embedder?: Embedder | null,
 ): Promise<void> {
   if (beforeOid === afterOid) return;
 
@@ -110,6 +129,7 @@ export async function refreshSearchIndexForMerge(
 
     if (entry.status === "deleted" || page.isDeleted) {
       await db.delete(schema.searchIndex).where(eq(schema.searchIndex.pageId, page.id));
+      await deletePageEmbeddings(db, page.id);
       continue;
     }
 
@@ -117,7 +137,7 @@ export async function refreshSearchIndexForMerge(
     if (contentBytes === null) continue;
 
     const markdown = new TextDecoder().decode(contentBytes);
-    await upsertSearchTsv(db, page.id, page.title, markdown);
+    await indexPage(db, page, markdown, null, embedder);
   }
 }
 
@@ -149,6 +169,7 @@ export async function reconcileRawPagesFromGit(
   db: Database,
   git: GitEngine,
   bundle: BundleRef,
+  embedder?: Embedder | null,
 ): Promise<{ upserted: number; deleted: number }> {
   const commitOid = await git.getRefOid(bundle.defaultBranch);
   if (!commitOid) return { upserted: 0, deleted: 0 };
@@ -192,7 +213,7 @@ export async function reconcileRawPagesFromGit(
 
     livePaths.push(pagePath);
     upserted += 1;
-    await upsertSearchTsv(db, page.id, page.title, markdown);
+    await indexPage(db, page, markdown, null, embedder);
   }
 
   // Soft-delete rows whose file no longer exists after the pull.
@@ -204,6 +225,7 @@ export async function reconcileRawPagesFromGit(
       .set({ isDeleted: true })
       .where(eq(schema.pages.id, row.id));
     await db.delete(schema.searchIndex).where(eq(schema.searchIndex.pageId, row.id));
+    await deletePageEmbeddings(db, row.id);
   }
 
   return { upserted, deleted: stale.length };
@@ -226,6 +248,7 @@ export async function reconcileOkfSearchIndex(
   db: Database,
   git: GitEngine,
   bundle: BundleRef,
+  embedder?: Embedder | null,
 ): Promise<void> {
   const prefix = okfGitPathPrefix(bundle.slug);
   const commitOid = await git.getRefOid(bundle.defaultBranch);
@@ -241,8 +264,11 @@ export async function reconcileOkfSearchIndex(
     if (contentBytes === null) continue;
 
     const markdown = new TextDecoder().decode(contentBytes);
+    const frontmatter = parseOkfFrontmatter(markdown);
     const fallbackTitle = sitePath.split("/").pop() ?? sitePath;
-    const title = titleFromOkfMarkdown(markdown, fallbackTitle);
+    const title = frontmatter?.title?.trim() || fallbackTitle;
+    const body = stripFrontmatter(markdown);
+    const metadata = frontmatterToMetadata(frontmatter);
 
     const [page] = await db
       .insert(schema.pages)
@@ -255,10 +281,11 @@ export async function reconcileOkfSearchIndex(
     if (!page) continue;
 
     livePaths.push(sitePath);
-    await upsertSearchTsv(db, page.id, title, stripFrontmatter(markdown));
+    await indexPage(db, page, body, metadata, embedder);
   }
 
   // Drop rows for docs no longer in the tree (deleted since the last reconcile).
+  // Hard-delete cascades to search_index + page_embedding_chunks via FK.
   const staleFilter =
     livePaths.length > 0
       ? and(
@@ -268,4 +295,45 @@ export async function reconcileOkfSearchIndex(
         )
       : and(eq(schema.pages.bundleId, bundle.id), eq(schema.pages.source, "okf"));
   await db.delete(schema.pages).where(staleFilter);
+}
+
+/**
+ * Full reconcile of raw + OKF search/embeddings for one bundle. Used by the
+ * admin reindex action to backfill tsv/content/metadata/vectors.
+ */
+export async function reindexBundleSearch(
+  db: Database,
+  git: GitEngine,
+  bundle: BundleRef,
+  embedder?: Embedder | null,
+): Promise<{ pages: number; embedFailures: number }> {
+  // Count failures by wrapping embedder so indexPage's try/catch still logs,
+  // but we also track how many pages failed embedding for the admin UI.
+  let embedFailures = 0;
+  const tracked: Embedder | null | undefined = embedder
+    ? {
+        model: embedder.model,
+        embed: async (texts) => {
+          try {
+            return await embedder.embed(texts);
+          } catch (err) {
+            embedFailures += 1;
+            throw err;
+          }
+        },
+      }
+    : embedder;
+
+  await reconcileRawPagesFromGit(db, git, bundle, tracked);
+  await reconcileOkfSearchIndex(db, git, bundle, tracked);
+
+  const livePages = await db.query.pages.findMany({
+    where: and(
+      eq(schema.pages.bundleId, bundle.id),
+      eq(schema.pages.isDeleted, false),
+    ),
+    columns: { id: true },
+  });
+
+  return { pages: livePages.length, embedFailures };
 }

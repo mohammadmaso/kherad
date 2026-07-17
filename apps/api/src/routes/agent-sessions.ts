@@ -12,11 +12,13 @@ import {
   type UIMessage,
   type UIMessageChunk,
 } from "ai";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 
-import { interviewerInstructions } from "../agents/interviewer/prompt";
-import { createInterviewerTools } from "../agents/interviewer/tools";
+import { specialistInstructions, type Aggressiveness } from "../agents/specialist/prompt";
+import { createSpecialistTools } from "../agents/specialist/tools";
+import { loadSessionSkills } from "../agents/skills";
+import { buildPageMentionContext, extractPageMentions } from "../agents/page-mentions";
 import { startIndexerRun } from "../agents/indexer/run";
 import { buildModel, loadAiSettings } from "../agents/settings";
 import { getBundleOrNull } from "../lib/get-bundle";
@@ -25,18 +27,20 @@ import { pageGitPath } from "../lib/wiki-paths";
 const MAX_AGENT_STEPS = 24;
 const MAX_UPLOAD_BYTES = 256 * 1024;
 const MAX_UPLOADS_PER_SESSION = 10;
+const MAX_ROLE_CHARS = 80;
+const MAX_SKILLS_PER_SESSION = 20;
 const TEXT_MIME_PREFIXES = ["text/", "application/json", "application/csv"];
 const TEXT_EXTENSIONS = new Set([".md", ".txt", ".csv", ".json", ".markdown", ".tsv"]);
+const DEFAULT_SESSION_TITLE = "Specialist session";
 
-const AVAILABLE_AGENTS = [
-  {
-    id: "interviewer" as const,
-    name: "Interviewer",
-    description:
-      "Define a documentation goal, answer structured questions, and produce a wiki-ready markdown draft.",
-    href: "/agents/interviewer",
-  },
-];
+const AGGRESSIVENESS_VALUES = ["relaxed", "balanced", "aggressive"] as const;
+
+function parseAggressiveness(value: unknown): Aggressiveness | null {
+  return typeof value === "string" &&
+    (AGGRESSIVENESS_VALUES as readonly string[]).includes(value)
+    ? (value as Aggressiveness)
+    : null;
+}
 
 async function allocatePagePath(
   db: Database,
@@ -66,7 +70,7 @@ function sessionTitleFrom(goal: string | null | undefined, message?: UIMessage):
     .map((part) => (part.type === "text" ? part.text : ""))
     .join(" ")
     .trim();
-  return (text || "Interview session").slice(0, 80);
+  return (text || DEFAULT_SESSION_TITLE).slice(0, 80);
 }
 
 function isAllowedTextUpload(filename: string, mimeType: string): boolean {
@@ -93,27 +97,49 @@ async function requireAgentAccess(
   return true;
 }
 
-async function loadOwnedSession(db: Database, sessionId: string, userId: string, isAdmin: boolean) {
+async function loadOwnedSession(
+  db: Database,
+  sessionId: string,
+  userId: string,
+  isAdmin: boolean,
+) {
   const session = await db.query.agentSessions.findFirst({
-    where: and(
-      eq(schema.agentSessions.id, sessionId),
-      eq(schema.agentSessions.agentType, "interviewer"),
-    ),
+    where: eq(schema.agentSessions.id, sessionId),
   });
   if (!session) return null;
   if (!isAdmin && session.userId !== userId) return null;
   return session;
 }
 
+/** Resolves the subset of the given ids that are real skills, capped and de-duped. */
+async function resolveSkillIds(db: Database, ids: unknown): Promise<string[]> {
+  if (!Array.isArray(ids)) return [];
+  const requested = [...new Set(ids.filter((id): id is string => typeof id === "string"))].slice(
+    0,
+    MAX_SKILLS_PER_SESSION,
+  );
+  if (requested.length === 0) return [];
+  const rows = await db.query.skills.findMany({
+    where: inArray(schema.skills.id, requested),
+    columns: { id: true },
+  });
+  return rows.map((r) => r.id);
+}
+
 function toSessionResponse(
   session: typeof schema.agentSessions.$inferSelect,
-  extras?: { uploadCount?: number; bundle?: { id: string; slug: string; title: string; mode: string } | null },
+  extras?: {
+    uploadCount?: number;
+    bundle?: { id: string; slug: string; title: string; mode: string } | null;
+    skills?: Array<{ id: string; name: string }>;
+  },
 ) {
   return {
     id: session.id,
-    agentType: session.agentType,
     title: session.title,
     goal: session.goal,
+    role: session.role,
+    aggressiveness: session.aggressiveness,
     bundleId: session.bundleId,
     draftMarkdown: session.draftMarkdown,
     status: session.status,
@@ -121,10 +147,11 @@ function toSessionResponse(
     updatedAt: session.updatedAt.toISOString(),
     uploadCount: extras?.uploadCount ?? 0,
     bundle: extras?.bundle ?? null,
+    skills: extras?.skills ?? [],
   };
 }
 
-export async function interviewerRoutes(server: FastifyInstance, db: Database, git: GitEngine) {
+export async function agentSessionRoutes(server: FastifyInstance, db: Database, git: GitEngine) {
   // @fastify/multipart is registered by ingest routes on the same Fastify
   // instance — do not register it again here.
 
@@ -133,21 +160,18 @@ export async function interviewerRoutes(server: FastifyInstance, db: Database, g
     const user = request.user!;
 
     const sessions = await db.query.agentSessions.findMany({
-      where: and(
-        eq(schema.agentSessions.userId, user.id),
-        eq(schema.agentSessions.agentType, "interviewer"),
-      ),
+      where: eq(schema.agentSessions.userId, user.id),
       orderBy: desc(schema.agentSessions.updatedAt),
       limit: 30,
     });
 
     return {
-      agents: AVAILABLE_AGENTS,
       sessions: sessions.map((s) => ({
         id: s.id,
-        agentType: s.agentType,
         title: s.title,
         goal: s.goal,
+        role: s.role,
+        aggressiveness: s.aggressiveness,
         status: s.status,
         bundleId: s.bundleId,
         updatedAt: s.updatedAt.toISOString(),
@@ -157,11 +181,24 @@ export async function interviewerRoutes(server: FastifyInstance, db: Database, g
   });
 
   server.post<{
-    Body: { goal?: string; bundleId?: string | null };
-  }>("/agents/interviewer/sessions", async (request, reply) => {
+    Body: {
+      goal?: string;
+      bundleId?: string | null;
+      role?: string;
+      aggressiveness?: string;
+      skillIds?: string[];
+    };
+  }>("/agents/sessions", async (request, reply) => {
     if (!(await requireAgentAccess(db, request.user, reply))) return;
     const user = request.user!;
     const goal = request.body?.goal?.trim() || null;
+    const role = request.body?.role?.trim().slice(0, MAX_ROLE_CHARS) || null;
+    const aggressiveness = request.body?.aggressiveness
+      ? parseAggressiveness(request.body.aggressiveness)
+      : "balanced";
+    if (!aggressiveness) {
+      return reply.code(400).send({ error: "Invalid aggressiveness" });
+    }
     let bundleId: string | null = request.body?.bundleId ?? null;
 
     if (bundleId) {
@@ -177,13 +214,16 @@ export async function interviewerRoutes(server: FastifyInstance, db: Database, g
       bundleId = null;
     }
 
+    const skillIds = await resolveSkillIds(db, request.body?.skillIds);
+
     const [session] = await db
       .insert(schema.agentSessions)
       .values({
         userId: user.id,
-        agentType: "interviewer",
         title: sessionTitleFrom(goal),
         goal,
+        role,
+        aggressiveness,
         bundleId,
         status: "active",
       })
@@ -193,12 +233,18 @@ export async function interviewerRoutes(server: FastifyInstance, db: Database, g
       return reply.code(500).send({ error: "Failed to create session" });
     }
 
+    if (skillIds.length > 0) {
+      await db
+        .insert(schema.agentSessionSkills)
+        .values(skillIds.map((skillId) => ({ sessionId: session.id, skillId })));
+    }
+
     reply.code(201);
     return toSessionResponse(session, { uploadCount: 0 });
   });
 
   server.get<{ Params: { sessionId: string } }>(
-    "/agents/interviewer/sessions/:sessionId",
+    "/agents/sessions/:sessionId",
     async (request, reply) => {
       if (!(await requireAgentAccess(db, request.user, reply))) return;
       const user = request.user!;
@@ -207,7 +253,7 @@ export async function interviewerRoutes(server: FastifyInstance, db: Database, g
         return reply.code(404).send({ error: "Session not found" });
       }
 
-      const [uploads, messages, bundle] = await Promise.all([
+      const [uploads, messages, bundle, sessionSkills] = await Promise.all([
         db.query.agentUploads.findMany({
           where: eq(schema.agentUploads.sessionId, session.id),
           columns: {
@@ -224,6 +270,10 @@ export async function interviewerRoutes(server: FastifyInstance, db: Database, g
           orderBy: schema.agentMessages.createdAt,
         }),
         session.bundleId ? getBundleOrNull(db, session.bundleId) : Promise.resolve(undefined),
+        db.query.agentSessionSkills.findMany({
+          where: eq(schema.agentSessionSkills.sessionId, session.id),
+          with: { skill: { columns: { id: true, name: true } } },
+        }),
       ]);
 
       return {
@@ -232,6 +282,9 @@ export async function interviewerRoutes(server: FastifyInstance, db: Database, g
           bundle: bundle
             ? { id: bundle.id, slug: bundle.slug, title: bundle.title, mode: bundle.mode }
             : null,
+          skills: sessionSkills
+            .map((row) => row.skill)
+            .filter((s): s is { id: string; name: string } => s !== null),
         }),
         uploads: uploads.map((u) => ({
           id: u.id,
@@ -256,9 +309,11 @@ export async function interviewerRoutes(server: FastifyInstance, db: Database, g
       bundleId?: string | null;
       draftMarkdown?: string | null;
       title?: string;
+      role?: string | null;
+      aggressiveness?: string;
       status?: "active" | "draft_ready" | "imported" | "archived";
     };
-  }>("/agents/interviewer/sessions/:sessionId", async (request, reply) => {
+  }>("/agents/sessions/:sessionId", async (request, reply) => {
     if (!(await requireAgentAccess(db, request.user, reply))) return;
     const user = request.user!;
     const session = await loadOwnedSession(db, request.params.sessionId, user.id, user.isAdmin);
@@ -275,6 +330,16 @@ export async function interviewerRoutes(server: FastifyInstance, db: Database, g
       if (updates.goal && !request.body.title) {
         updates.title = updates.goal.slice(0, 80);
       }
+    }
+    if (request.body.role !== undefined) {
+      updates.role = request.body.role?.trim().slice(0, MAX_ROLE_CHARS) || null;
+    }
+    if (request.body.aggressiveness !== undefined) {
+      const aggressiveness = parseAggressiveness(request.body.aggressiveness);
+      if (!aggressiveness) {
+        return reply.code(400).send({ error: "Invalid aggressiveness" });
+      }
+      updates.aggressiveness = aggressiveness;
     }
     if (request.body.title !== undefined) {
       const title = request.body.title.trim();
@@ -316,7 +381,7 @@ export async function interviewerRoutes(server: FastifyInstance, db: Database, g
   });
 
   server.post<{ Params: { sessionId: string } }>(
-    "/agents/interviewer/sessions/:sessionId/uploads",
+    "/agents/sessions/:sessionId/uploads",
     async (request, reply) => {
       if (!(await requireAgentAccess(db, request.user, reply))) return;
       const user = request.user!;
@@ -379,7 +444,7 @@ export async function interviewerRoutes(server: FastifyInstance, db: Database, g
   );
 
   server.delete<{ Params: { sessionId: string; uploadId: string } }>(
-    "/agents/interviewer/sessions/:sessionId/uploads/:uploadId",
+    "/agents/sessions/:sessionId/uploads/:uploadId",
     async (request, reply) => {
       if (!(await requireAgentAccess(db, request.user, reply))) return;
       const user = request.user!;
@@ -408,7 +473,7 @@ export async function interviewerRoutes(server: FastifyInstance, db: Database, g
   server.post<{
     Params: { sessionId: string };
     Body: { messages: UIMessage[] };
-  }>("/agents/interviewer/sessions/:sessionId/chat", async (request, reply) => {
+  }>("/agents/sessions/:sessionId/chat", async (request, reply) => {
     if (!(await requireAgentAccess(db, request.user, reply))) return;
     const user = request.user!;
     const session = await loadOwnedSession(db, request.params.sessionId, user.id, user.isAdmin);
@@ -433,7 +498,7 @@ export async function interviewerRoutes(server: FastifyInstance, db: Database, g
         role: "user",
         parts: lastUserMessage.parts,
       });
-      if (!session.goal && session.title === "Interview session") {
+      if (!session.goal && session.title === DEFAULT_SESSION_TITLE) {
         const title = sessionTitleFrom(null, lastUserMessage);
         await db
           .update(schema.agentSessions)
@@ -447,36 +512,36 @@ export async function interviewerRoutes(server: FastifyInstance, db: Database, g
       }
     }
 
-    const bundle = session.bundleId ? await getBundleOrNull(db, session.bundleId) : null;
-    const uploadCount = await db.query.agentUploads.findMany({
-      where: eq(schema.agentUploads.sessionId, session.id),
-      columns: { id: true },
+    const [bundle, uploadRows, sessionSkills] = await Promise.all([
+      session.bundleId ? getBundleOrNull(db, session.bundleId) : Promise.resolve(null),
+      db.query.agentUploads.findMany({
+        where: eq(schema.agentUploads.sessionId, session.id),
+        columns: { id: true },
+      }),
+      loadSessionSkills(db, session.id),
+    ]);
+
+    const mentionContext = await buildPageMentionContext({
+      db,
+      git,
+      user,
+      mentions: extractPageMentions(messages),
     });
 
     const agent = new Agent({
-      id: "interviewer",
-      name: "Interviewer",
-      instructions: interviewerInstructions({
-        goal: session.goal,
-        bundleTitle: bundle?.title ?? null,
-        hasUploads: uploadCount.length > 0,
-      }),
+      id: "specialist",
+      name: "Specialist",
+      instructions:
+        specialistInstructions({
+          role: session.role,
+          goal: session.goal,
+          bundleTitle: bundle?.title ?? null,
+          hasUploads: uploadRows.length > 0,
+          aggressiveness: session.aggressiveness,
+          skills: sessionSkills,
+        }) + mentionContext,
       model: buildModel(settings, "interviewer"),
-      tools: createInterviewerTools({
-        db,
-        git,
-        user,
-        sessionId: session.id,
-        bundle: bundle
-          ? {
-              id: bundle.id,
-              slug: bundle.slug,
-              title: bundle.title,
-              defaultBranch: bundle.defaultBranch,
-              isPublic: bundle.isPublic,
-            }
-          : null,
-      }),
+      tools: createSpecialistTools({ db, git, user, sessionId: session.id }),
     });
 
     const agentStream = await agent.stream(messages, { maxSteps: MAX_AGENT_STEPS });
@@ -501,7 +566,7 @@ export async function interviewerRoutes(server: FastifyInstance, db: Database, g
             .set({ updatedAt: new Date() })
             .where(eq(schema.agentSessions.id, session.id));
         } catch (err) {
-          server.log.error({ err, sessionId: session.id }, "failed to persist interviewer chat");
+          server.log.error({ err, sessionId: session.id }, "failed to persist agent chat");
         }
       },
     });
@@ -519,7 +584,7 @@ export async function interviewerRoutes(server: FastifyInstance, db: Database, g
   server.post<{
     Params: { sessionId: string };
     Body: { bundleId: string; path?: string; title: string };
-  }>("/agents/interviewer/sessions/:sessionId/import", async (request, reply) => {
+  }>("/agents/sessions/:sessionId/import", async (request, reply) => {
     if (!(await requireAgentAccess(db, request.user, reply))) return;
     const user = request.user!;
     const session = await loadOwnedSession(db, request.params.sessionId, user.id, user.isAdmin);
@@ -529,7 +594,7 @@ export async function interviewerRoutes(server: FastifyInstance, db: Database, g
 
     const draft = session.draftMarkdown?.trim();
     if (!draft) {
-      return reply.code(400).send({ error: "Draft is empty — finish the interview first" });
+      return reply.code(400).send({ error: "Draft is empty — finish the session first" });
     }
 
     const { title } = request.body;
@@ -557,7 +622,7 @@ export async function interviewerRoutes(server: FastifyInstance, db: Database, g
     await git.writeAndCommit(
       branch,
       [{ path: pageGitPath(bundle.slug, path), content: draft }],
-      `Import interview draft: ${path}`,
+      `Import agent draft: ${path}`,
       { name: user.displayName, email: user.email },
     );
 
@@ -613,7 +678,7 @@ export async function interviewerRoutes(server: FastifyInstance, db: Database, g
   });
 
   // Bundles the caller can attach / import into (view for context, edit for import).
-  server.get("/agents/interviewer/bundles", async (request, reply) => {
+  server.get("/agents/bundles", async (request, reply) => {
     if (!(await requireAgentAccess(db, request.user, reply))) return;
     const user = request.user!;
 

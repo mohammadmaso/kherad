@@ -6,6 +6,7 @@ import { notFound, redirect } from "next/navigation";
 
 import { WikiContent } from "@/components/wiki/wiki-content";
 import { getViewer } from "@/lib/auth";
+import { decodePathSegments } from "@/lib/decode-path-segments";
 import { getDictionary } from "@/lib/i18n/get-dictionary";
 import { resolveSourcePage } from "@/lib/source-render";
 
@@ -22,7 +23,8 @@ function prettify(segment: string): string {
  * `llm_compiled` bundles shows only the approved OKF knowledge base.
  */
 export default async function SourcePage({ params }: Props) {
-  const { bundleSlug, path } = await params;
+  const { bundleSlug, path: rawPath } = await params;
+  const path = decodePathSegments(rawPath);
   const t = await getDictionary();
   const viewer = await getViewer();
   const result = await resolveSourcePage(bundleSlug, path, viewer);

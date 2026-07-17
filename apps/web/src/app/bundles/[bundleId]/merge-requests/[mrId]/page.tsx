@@ -164,7 +164,7 @@ export default function MergeRequestDetailPage() {
         <div>
           <button
             type="button"
-            onClick={() => router.push(`/bundles/${bundleId}/merge-requests`)}
+            onClick={() => router.push("/admin/merge-requests")}
             className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-sm"
           >
             <ArrowLeft className="size-3.5 rtl:rotate-180" />

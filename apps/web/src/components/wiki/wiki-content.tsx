@@ -2,6 +2,8 @@
 
 import { useEffect, useRef } from "react";
 
+import { useI18n } from "@/lib/i18n/provider";
+
 let mermaidInitialized = false;
 
 /**
@@ -12,6 +14,7 @@ let mermaidInitialized = false;
  */
 export function WikiContent({ html }: { html: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const { t } = useI18n();
 
   useEffect(() => {
     const container = containerRef.current;
@@ -22,23 +25,44 @@ export function WikiContent({ html }: { html: string }) {
 
     let cancelled = false;
     const namespace = `wiki-mermaid-${Math.random().toString(36).slice(2)}`;
+    const errorMessage = t.wiki.mermaidRenderFailed;
 
     (async () => {
       const mermaid = (await import("mermaid")).default;
       if (!mermaidInitialized) {
-        mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: "strict",
+          // Mermaid otherwise injects a red "Syntax error in text / mermaid version …"
+          // SVG into the page on parse failure — we handle errors ourselves.
+          suppressErrorRendering: true,
+        });
         mermaidInitialized = true;
       }
 
       for (const [index, block] of blocks.entries()) {
         const source = block.textContent ?? "";
+        const renderId = `${namespace}-${index}`;
         try {
-          const { svg } = await mermaid.render(`${namespace}-${index}`, source);
+          const { svg } = await mermaid.render(renderId, source);
           if (!cancelled) block.outerHTML = svg;
-        } catch (err) {
+        } catch {
+          // Mermaid may still leave a temporary error node in <body>.
+          document.getElementById(`d${renderId}`)?.remove();
+          document.getElementById(renderId)?.remove();
           if (!cancelled) {
-            block.textContent = err instanceof Error ? err.message : "Failed to render diagram";
+            block.textContent = "";
             block.classList.add("mermaid-error");
+            const message = document.createElement("p");
+            message.className = "mermaid-error-message";
+            message.textContent = errorMessage;
+            block.appendChild(message);
+            if (source.trim()) {
+              const code = document.createElement("pre");
+              code.className = "mermaid-error-source";
+              code.textContent = source.trim();
+              block.appendChild(code);
+            }
           }
         }
       }
@@ -47,7 +71,7 @@ export function WikiContent({ html }: { html: string }) {
     return () => {
       cancelled = true;
     };
-  }, [html]);
+  }, [html, t.wiki.mermaidRenderFailed]);
 
   return (
     <div

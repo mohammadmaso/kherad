@@ -16,6 +16,7 @@ import type { FastifyInstance } from "fastify";
 
 import { chatInstructions } from "../agents/chat/prompt";
 import { createChatTools } from "../agents/chat/tools";
+import { buildPageMentionContext, extractPageMentions } from "../agents/page-mentions";
 import { buildModel, loadAiSettings } from "../agents/settings";
 import { getBundleOrNull, isUuid } from "../lib/get-bundle";
 
@@ -128,12 +129,19 @@ export async function chatRoutes(server: FastifyInstance, db: Database, git: Git
       }
     }
 
+    const mentionContext = await buildPageMentionContext({
+      db,
+      git,
+      user,
+      mentions: extractPageMentions(messages),
+    });
+
     const agent = new Agent({
       id: "okf-chat",
       name: "Knowledge Assistant",
-      instructions: chatInstructions(bundle),
+      instructions: chatInstructions(bundle) + mentionContext,
       model: buildModel(settings, "chat"),
-      tools: createChatTools({ git, bundle }),
+      tools: createChatTools({ db, git, bundle }),
     });
 
     const agentStream = await agent.stream(messages, { maxSteps: MAX_AGENT_STEPS });

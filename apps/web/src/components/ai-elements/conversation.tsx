@@ -14,7 +14,10 @@ export function Conversation({ className, ...props }: ComponentProps<typeof Stic
     <StickToBottom
       className={cn("relative flex-1 overflow-y-auto", className)}
       initial="smooth"
-      resize="smooth"
+      // Streaming appends resize the content many times per second; an animated
+      // follow restarts on every resize and makes the pinned view jitter, so
+      // follow instantly and keep "smooth" only for the initial scroll.
+      resize="instant"
       role="log"
       {...props}
     />

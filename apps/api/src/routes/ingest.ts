@@ -106,8 +106,7 @@ async function callOcrBatch(
   pages: IngestPageImage[],
 ): Promise<string> {
   const content: Array<
-    | { type: "text"; text: string }
-    | { type: "image_url"; image_url: { url: string } }
+    { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }
   > = [
     {
       type: "text",
@@ -180,7 +179,9 @@ export async function ingestRoutes(server: FastifyInstance, db: Database, git: G
 
       const ingestUrl = process.env.INGEST_SERVICE_URL?.replace(/\/+$/, "");
       if (!ingestUrl) {
-        return reply.code(503).send({ error: "Ingest service is not configured (INGEST_SERVICE_URL)" });
+        return reply
+          .code(503)
+          .send({ error: "Ingest service is not configured (INGEST_SERVICE_URL)" });
       }
 
       const file = await request.file();
@@ -215,9 +216,11 @@ export async function ingestRoutes(server: FastifyInstance, db: Database, git: G
 
       if (!upstream.ok) {
         const detail = await upstream.text().catch(() => "");
-        return reply.code(upstream.status === 413 || upstream.status === 422 ? upstream.status : 502).send({
-          error: detail.slice(0, 500) || `Ingest service error (${upstream.status})`,
-        });
+        return reply
+          .code(upstream.status === 413 || upstream.status === 422 ? upstream.status : 502)
+          .send({
+            error: detail.slice(0, 500) || `Ingest service error (${upstream.status})`,
+          });
       }
 
       const payload = (await upstream.json()) as {
@@ -344,7 +347,9 @@ export async function ingestRoutes(server: FastifyInstance, db: Database, git: G
 
     const settings = await loadOcrSettings(db);
     if (!settings) {
-      return reply.code(503).send({ error: "OCR is not configured. Ask an admin to set OCR settings." });
+      return reply
+        .code(503)
+        .send({ error: "OCR is not configured. Ask an admin to set OCR settings." });
     }
 
     try {
@@ -458,61 +463,57 @@ Suggest a short human title and a URL-safe path (lowercase, hyphens, optional fo
   server.post<{
     Params: { bundleId: string };
     Body: { title: string; path: string; markdown: string; jobId?: string };
-  }>(
-    "/bundles/:bundleId/ingest/commit",
-    { preHandler: requireAuth() },
-    async (request, reply) => {
-      const bundle = await getBundleOrNull(db, request.params.bundleId);
-      if (!bundle) return reply.code(404).send({ error: "Bundle not found" });
+  }>("/bundles/:bundleId/ingest/commit", { preHandler: requireAuth() }, async (request, reply) => {
+    const bundle = await getBundleOrNull(db, request.params.bundleId);
+    if (!bundle) return reply.code(404).send({ error: "Bundle not found" });
 
-      const { title, markdown = "" } = request.body ?? {};
-      if (!title?.trim()) return reply.code(400).send({ error: "Title is required" });
-      if (typeof markdown !== "string") {
-        return reply.code(400).send({ error: "markdown is required" });
-      }
+    const { title, markdown = "" } = request.body ?? {};
+    if (!title?.trim()) return reply.code(400).send({ error: "Title is required" });
+    if (typeof markdown !== "string") {
+      return reply.code(400).send({ error: "markdown is required" });
+    }
 
-      const basePath = resolvePagePath({ path: request.body.path, title });
-      if (basePath === null) return reply.code(400).send({ error: "Invalid path" });
-      const path = await allocatePagePath(db, bundle.id, basePath);
+    const basePath = resolvePagePath({ path: request.body.path, title });
+    if (basePath === null) return reply.code(400).send({ error: "Invalid path" });
+    const path = await allocatePagePath(db, bundle.id, basePath);
 
-      const allowed = await checkPermission(db, request.user, bundle, path, "edit");
-      if (!allowed) return reply.code(403).send({ error: "Forbidden" });
-      const user = request.user!;
+    const allowed = await checkPermission(db, request.user, bundle, path, "edit");
+    if (!allowed) return reply.code(403).send({ error: "Forbidden" });
+    const user = request.user!;
 
-      const branch = await git.createUserBranch(user.id);
-      const author = { name: user.displayName, email: user.email };
-      let content = markdown;
-      try {
-        content = await rewriteEmbeddedImages(git, {
-          bundleSlug: bundle.slug,
-          branch,
-          markdown,
-          author,
-        });
-      } catch (err) {
-        request.log.error({ err }, "ingest image rewrite failed");
-        return reply.code(500).send({ error: "Failed to upload embedded images" });
-      }
-
-      await git.writeAndCommit(
+    const branch = await git.createUserBranch(user.id);
+    const author = { name: user.displayName, email: user.email };
+    let content = markdown;
+    try {
+      content = await rewriteEmbeddedImages(git, {
+        bundleSlug: bundle.slug,
         branch,
-        [{ path: pageGitPath(bundle.slug, path), content }],
-        `Ingest document: ${path}`,
+        markdown,
         author,
-      );
+      });
+    } catch (err) {
+      request.log.error({ err }, "ingest image rewrite failed");
+      return reply.code(500).send({ error: "Failed to upload embedded images" });
+    }
 
-      const page = await upsertRawPage(db, bundle.id, path, title.trim());
+    await git.writeAndCommit(
+      branch,
+      [{ path: pageGitPath(bundle.slug, path), content }],
+      `Ingest document: ${path}`,
+      author,
+    );
 
-      // Drop job from memory if provided (best-effort).
-      if (request.body.jobId) {
-        const job = getIngestJob(request.body.jobId);
-        if (job && job.userId === user.id) {
-          updateIngestJobMarkdown(job.id, content);
-        }
+    const page = await upsertRawPage(db, bundle.id, path, title.trim());
+
+    // Drop job from memory if provided (best-effort).
+    if (request.body.jobId) {
+      const job = getIngestJob(request.body.jobId);
+      if (job && job.userId === user.id) {
+        updateIngestJobMarkdown(job.id, content);
       }
+    }
 
-      reply.code(201);
-      return page;
-    },
-  );
+    reply.code(201);
+    return page;
+  });
 }

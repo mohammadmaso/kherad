@@ -34,6 +34,8 @@ import { useI18n } from "@/lib/i18n/provider";
 const SAFE_URL_PATTERN = /^(?:https?|mailto|tel):/i;
 const WIKI_PATH_PATTERN = /^\/wiki\/[^/\s]+\/.+/;
 const MAX_PAGE_SUGGESTIONS = 12;
+/** Stable empty list so derived `pages` doesn't change identity every render. */
+const NO_PAGES: PageSummary[] = [];
 
 /** Placeholder written into freshly created links until the user picks a page or URL. */
 export const NEW_LINK_URL = "https://";
@@ -83,19 +85,23 @@ export function LinkEditorPlugin({ bundleId }: { bundleId?: string }): JSX.Eleme
   const { t } = useI18n();
   const [linkState, setLinkState] = useState<LinkState | null>(null);
   const [value, setValue] = useState("");
-  const [pages, setPages] = useState<PageSummary[]>([]);
-  const [bundleSlug, setBundleSlug] = useState<string | null>(null);
+  // Fetched suggestions stay keyed by the bundle they belong to, so a stale
+  // bundle's pages are simply not derived below — no reset-in-effect needed.
+  const [linkTargets, setLinkTargets] = useState<{
+    bundleId: string;
+    slug: string;
+    pages: PageSummary[];
+  } | null>(null);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const lastKeyRef = useRef<string | null>(null);
 
+  const bundleSlug = bundleId && linkTargets?.bundleId === bundleId ? linkTargets.slug : null;
+  const pages = bundleId && linkTargets?.bundleId === bundleId ? linkTargets.pages : NO_PAGES;
+
   useEffect(() => {
-    if (!bundleId) {
-      setPages([]);
-      setBundleSlug(null);
-      return;
-    }
+    if (!bundleId) return;
     let cancelled = false;
     (async () => {
       try {
@@ -104,8 +110,11 @@ export function LinkEditorPlugin({ bundleId }: { bundleId?: string }): JSX.Eleme
           fetchBundlePages(bundleId),
         ]);
         if (cancelled) return;
-        setBundleSlug(bundle.slug);
-        setPages(pageRows.filter((page) => !page.isDeleted));
+        setLinkTargets({
+          bundleId,
+          slug: bundle.slug,
+          pages: pageRows.filter((page) => !page.isDeleted),
+        });
       } catch {
         // Page picker is best-effort; external URLs still work.
       }
@@ -218,9 +227,15 @@ export function LinkEditorPlugin({ bundleId }: { bundleId?: string }): JSX.Eleme
       .slice(0, MAX_PAGE_SUGGESTIONS);
   }, [bundleSlug, pages, value]);
 
-  useEffect(() => {
+  // Reset the keyboard highlight to the top suggestion whenever the input or
+  // the suggestion list changes — adjusted during render (not in an effect) so
+  // the old highlight never flashes on a fresh list.
+  const suggestionsKey = `${pageSuggestions.length}:${value}`;
+  const [prevSuggestionsKey, setPrevSuggestionsKey] = useState(suggestionsKey);
+  if (suggestionsKey !== prevSuggestionsKey) {
+    setPrevSuggestionsKey(suggestionsKey);
     setHighlightedIndex(0);
-  }, [value, pageSuggestions.length]);
+  }
 
   useLayoutEffect(() => {
     const element = popoverRef.current;
@@ -291,9 +306,7 @@ export function LinkEditorPlugin({ bundleId }: { bundleId?: string }): JSX.Eleme
     }
     if (event.key === "ArrowUp" && pageSuggestions.length > 0) {
       event.preventDefault();
-      setHighlightedIndex(
-        (index) => (index - 1 + pageSuggestions.length) % pageSuggestions.length,
-      );
+      setHighlightedIndex((index) => (index - 1 + pageSuggestions.length) % pageSuggestions.length);
       return;
     }
     if (event.key === "Enter") {

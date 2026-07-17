@@ -5,11 +5,13 @@ import { $getNodeByKey } from "lexical";
 import { useEffect, useId, useState, type ChangeEvent, type KeyboardEvent } from "react";
 
 import { $isMermaidNode } from "./nodes/mermaid-node";
+import { useI18n } from "@/lib/i18n/provider";
 
 let mermaidInitialized = false;
 
 export function MermaidPreview({ nodeKey, source }: { nodeKey: string; source: string }) {
   const [editor] = useLexicalComposerContext();
+  const { t } = useI18n();
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const renderId = useId().replace(/:/g, "-");
@@ -29,7 +31,11 @@ export function MermaidPreview({ nodeKey, source }: { nodeKey: string; source: s
       try {
         const mermaid = (await import("mermaid")).default;
         if (!mermaidInitialized) {
-          mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
+          mermaid.initialize({
+            startOnLoad: false,
+            securityLevel: "strict",
+            suppressErrorRendering: true,
+          });
           mermaidInitialized = true;
         }
         const { svg: rendered } = await mermaid.render(`mermaid-${renderId}`, source);
@@ -37,10 +43,12 @@ export function MermaidPreview({ nodeKey, source }: { nodeKey: string; source: s
           setSvg(rendered);
           setError(null);
         }
-      } catch (err) {
+      } catch {
+        document.getElementById(`dmermaid-${renderId}`)?.remove();
+        document.getElementById(`mermaid-${renderId}`)?.remove();
         if (!cancelled) {
           setSvg(null);
-          setError(err instanceof Error ? err.message : "Failed to render diagram");
+          setError(t.wiki.mermaidRenderFailed);
         }
       }
     })();
@@ -48,7 +56,7 @@ export function MermaidPreview({ nodeKey, source }: { nodeKey: string; source: s
     return () => {
       cancelled = true;
     };
-  }, [source, renderId]);
+  }, [source, renderId, t.wiki.mermaidRenderFailed]);
 
   function handleChange(event: ChangeEvent<HTMLTextAreaElement>) {
     const next = event.target.value;

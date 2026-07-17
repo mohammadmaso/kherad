@@ -25,6 +25,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
+import { NotificationBell } from "@/components/layout/notification-bell";
 import { SearchModal } from "@/components/search/search-modal";
 import { clearToken, fetchCurrentUser, getToken, logout, type AuthedUser } from "@/lib/api-client";
 import { LOCALE_LABELS, LOCALES } from "@/lib/i18n/config";
@@ -181,6 +182,8 @@ export function Header() {
                 {IS_MAC ? "⌘K" : "Ctrl K"}
               </kbd>
             </button>
+
+            <NotificationBell />
 
             <DropdownMenu>
               <DropdownMenuTrigger

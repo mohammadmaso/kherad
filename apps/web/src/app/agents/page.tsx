@@ -3,17 +3,12 @@
 import { Alert, AlertDescription, AlertTitle } from "@kherad/ui/components/ui/alert";
 import { Badge } from "@kherad/ui/components/ui/badge";
 import { Button } from "@kherad/ui/components/ui/button";
-import { MessageSquareIcon, SparklesIcon } from "lucide-react";
+import { BriefcaseIcon } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
-import {
-  fetchAgentsHub,
-  getToken,
-  type AgentCatalogItem,
-  type AgentSessionSummary,
-} from "@/lib/api-client";
+import { fetchAgentsHub, getToken, type AgentSessionSummary } from "@/lib/api-client";
 import { useI18n } from "@/lib/i18n/provider";
 
 function statusLabel(
@@ -35,7 +30,6 @@ function statusLabel(
 export default function AgentsPage() {
   const { t } = useI18n();
   const router = useRouter();
-  const [agents, setAgents] = useState<AgentCatalogItem[]>([]);
   const [sessions, setSessions] = useState<AgentSessionSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
@@ -51,7 +45,6 @@ export default function AgentsPage() {
       try {
         const hub = await fetchAgentsHub();
         if (cancelled) return;
-        setAgents(hub.agents);
         setSessions(hub.sessions);
         setLoaded(true);
       } catch (err) {
@@ -104,47 +97,25 @@ export default function AgentsPage() {
         </Alert>
       ) : null}
 
-      <section className="grid gap-3 sm:grid-cols-2">
-        {agents.map((agent) => (
-          <Link
-            key={agent.id}
-            href="/agents/interviewer"
-            className="border-border bg-card hover:bg-muted/40 group flex flex-col gap-3 rounded-2xl border p-5 transition-colors duration-150"
-          >
-            <div className="flex items-center gap-2">
-              <span className="bg-primary/12 text-primary flex size-9 items-center justify-center rounded-xl">
-                <MessageSquareIcon className="size-4" />
-              </span>
-              <h2 className="text-base font-semibold">{t.agents.interviewer}</h2>
-            </div>
-            <p className="text-muted-foreground text-sm leading-relaxed">
-              {t.agents.interviewerDesc}
-            </p>
-            <span className="text-primary text-sm font-medium group-hover:underline">
-              {t.agents.newInterview}
-            </span>
-          </Link>
-        ))}
-        <div className="border-border bg-muted/20 text-muted-foreground flex flex-col gap-3 rounded-2xl border border-dashed p-5">
-          <div className="flex items-center gap-2">
-            <span className="bg-muted flex size-9 items-center justify-center rounded-xl">
-              <SparklesIcon className="size-4" />
-            </span>
-            <h2 className="text-base font-semibold">{t.agents.comingSoon}</h2>
+      <section className="border-border bg-card flex flex-col gap-3 rounded-2xl border p-5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3">
+          <span className="bg-primary/12 text-primary flex size-9 items-center justify-center rounded-xl">
+            <BriefcaseIcon className="size-4" />
+          </span>
+          <div>
+            <h2 className="text-base font-semibold">{t.agents.specialist}</h2>
+            <p className="text-muted-foreground text-sm leading-relaxed">{t.agents.specialistDesc}</p>
           </div>
-          <p className="text-sm leading-relaxed">{t.agents.subtitle}</p>
         </div>
+        <Button nativeButton={false} render={<Link href="/agents/new" />} className="shrink-0">
+          {t.agents.newSpecialist}
+        </Button>
       </section>
 
       <section className="flex flex-col gap-3">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold tracking-wide uppercase opacity-80">
-            {t.agents.recentSessions}
-          </h2>
-          <Button size="sm" nativeButton={false} render={<Link href="/agents/interviewer" />}>
-            {t.agents.newInterview}
-          </Button>
-        </div>
+        <h2 className="text-sm font-semibold tracking-wide uppercase opacity-80">
+          {t.agents.recentSessions}
+        </h2>
         {sessions.length === 0 ? (
           <p className="text-muted-foreground text-sm">{t.agents.noSessions}</p>
         ) : (
@@ -152,14 +123,14 @@ export default function AgentsPage() {
             {sessions.map((session) => (
               <li key={session.id}>
                 <Link
-                  href={`/agents/interviewer/${session.id}`}
+                  href={`/agents/${session.id}`}
                   className="hover:bg-muted/40 flex items-center justify-between gap-3 px-4 py-3 transition-colors duration-150"
                 >
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium">{session.title}</p>
-                    {session.goal ? (
-                      <p className="text-muted-foreground truncate text-xs">{session.goal}</p>
-                    ) : null}
+                    <p className="text-muted-foreground truncate text-xs">
+                      {session.role || session.goal || t.agents.specialist}
+                    </p>
                   </div>
                   <Badge variant="secondary">{statusLabel(session.status, t)}</Badge>
                 </Link>

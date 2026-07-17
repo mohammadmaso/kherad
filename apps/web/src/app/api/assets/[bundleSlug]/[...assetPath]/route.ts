@@ -6,6 +6,7 @@ import type { NextRequest } from "next/server";
 
 import { getSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { decodePathSegments } from "@/lib/decode-path-segments";
 
 const IMAGE_MIME_TYPES: Record<string, string> = {
   png: "image/png",
@@ -30,7 +31,8 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ bundleSlug: string; assetPath: string[] }> },
 ) {
-  const { bundleSlug, assetPath } = await params;
+  const { bundleSlug, assetPath: rawAssetPath } = await params;
+  const assetPath = decodePathSegments(rawAssetPath);
   if (assetPath.some((segment) => segment === "" || segment === "." || segment === "..")) {
     return Response.json({ error: "Invalid path" }, { status: 400 });
   }

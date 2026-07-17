@@ -101,7 +101,13 @@ describe("git engine", () => {
         committer: signature,
       },
     });
-    await writeRef({ fs, gitdir, ref: "refs/heads/agent/okf-orphan", value: orphanOid, force: true });
+    await writeRef({
+      fs,
+      gitdir,
+      ref: "refs/heads/agent/okf-orphan",
+      value: orphanOid,
+      force: true,
+    });
 
     await engine.ensureBranchOff("agent/okf-orphan", DEFAULT_BRANCH);
     await engine.writeAndCommit(
@@ -327,17 +333,17 @@ describe("git engine", () => {
       AUTHOR,
     );
 
-    await expect(
-      engine.squashMerge("user/bob", DEFAULT_BRANCH, "merge bob"),
-    ).rejects.toSatisfy((err: unknown) => {
-      expect(err).toBeInstanceOf(MergeConflictDetectedError);
-      const markerText = (err as MergeConflictDetectedError).files[0]?.markerText ?? "";
-      expect(markerText).toMatch(/\n={7}\n/);
-      expect(markerText).toMatch(/\n>{7} /);
-      expect(markerText).not.toMatch(/```={7}/);
-      expect(markerText).not.toMatch(/[^\n]>{7} /);
-      return true;
-    });
+    await expect(engine.squashMerge("user/bob", DEFAULT_BRANCH, "merge bob")).rejects.toSatisfy(
+      (err: unknown) => {
+        expect(err).toBeInstanceOf(MergeConflictDetectedError);
+        const markerText = (err as MergeConflictDetectedError).files[0]?.markerText ?? "";
+        expect(markerText).toMatch(/\n={7}\n/);
+        expect(markerText).toMatch(/\n>{7} /);
+        expect(markerText).not.toMatch(/```={7}/);
+        expect(markerText).not.toMatch(/[^\n]>{7} /);
+        return true;
+      },
+    );
   });
 
   it("squashMerge uses NUL-free sentinel markers for binary image conflicts", async () => {
@@ -548,6 +554,9 @@ describe("git engine", () => {
         throw err;
       });
     expect(conflict).toBeInstanceOf(MergeConflictDetectedError);
+    if (!(conflict instanceof MergeConflictDetectedError)) {
+      throw new Error("expected a MergeConflictDetectedError");
+    }
     expect(conflict.files[0]?.path).toBe("okf/demo/concepts/a.md");
 
     const result = await engine.resolveMergeConflict(

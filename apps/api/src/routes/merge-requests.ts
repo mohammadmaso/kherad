@@ -3,6 +3,7 @@ import {
   isImageAssetPath,
   isNotFoundError,
   MergeConflictDetectedError,
+  okfDocSitePath,
   okfGitPathPrefix,
   userBranchName,
   type GitEngine,
@@ -13,8 +14,10 @@ import { schema, type Database } from "@kherad/db";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 
+import { createEmbedder } from "../lib/embedder";
 import { getBundleOrNull, isUuid } from "../lib/get-bundle";
 import { guessImageMimeType } from "../lib/mime";
+import { notifyMrSubmitted } from "./notifications";
 
 function decode(bytes: Uint8Array | null): string | null {
   return bytes ? new TextDecoder().decode(bytes) : null;
@@ -54,10 +57,11 @@ async function syncSearchIndex(
   beforeOid: string,
   afterOid: string,
 ): Promise<void> {
+  const embedder = await createEmbedder(db);
   if (mr.scope === "okf") {
-    await reconcileOkfSearchIndex(db, git, bundle);
+    await reconcileOkfSearchIndex(db, git, bundle, embedder);
   } else {
-    await refreshSearchIndexForMerge(db, git, bundle, beforeOid, afterOid);
+    await refreshSearchIndexForMerge(db, git, bundle, beforeOid, afterOid, embedder);
   }
 }
 
@@ -96,8 +100,11 @@ async function resolveMrDiffRefs(
 export async function mergeRequestRoutes(server: FastifyInstance, db: Database, git: GitEngine) {
   // "Submit for review": packages the author's branch into an MR for this bundle.
   // Re-submitting while an MR is still open/in-conflict updates that same MR
-  // rather than creating a new one, per PRD §3.
-  server.post<{ Params: { bundleId: string } }>(
+  // rather than creating a new one, per PRD §3. `scope` lets a human edit to a
+  // bundle's OKF docs (see okf-docs.ts) submit independently of any in-flight
+  // "wiki"-scope MR on the same user branch — `mrPathPrefix` scopes the diff
+  // and merge so the two never step on each other.
+  server.post<{ Params: { bundleId: string }; Body: { scope?: "wiki" | "okf" } }>(
     "/bundles/:bundleId/merge-requests",
     async (request, reply) => {
       const bundle = await getBundleOrNull(db, request.params.bundleId);
@@ -105,11 +112,12 @@ export async function mergeRequestRoutes(server: FastifyInstance, db: Database, 
         return reply.code(404).send({ error: "Bundle not found" });
       }
 
-      const allowed = await checkPermission(db, request.user, bundle, null, "edit");
-      if (!allowed) {
+      const scope = request.body?.scope === "okf" ? "okf" : "wiki";
+
+      if (!request.user) {
         return reply.code(403).send({ error: "Forbidden" });
       }
-      const user = request.user!;
+      const user = request.user;
       const branchName = userBranchName(user.id);
 
       const branches = await git.listBranches();
@@ -125,11 +133,34 @@ export async function mergeRequestRoutes(server: FastifyInstance, db: Database, 
         return reply.code(400).send({ error: "Could not resolve branch state" });
       }
 
+      // A single bundle-level `edit` check (path: null) misses authors who
+      // only hold a path-prefixed grant on the pages they actually touched —
+      // per checkPermission's precedence rules a null path can only match a
+      // bundle-level grant, so those authors were wrongly 403'd here even
+      // though they may edit every page in this diff. Check each changed
+      // page/doc's own path instead, same as every other route in this app.
+      const prefix = mrPathPrefix(bundle, { scope });
+      const changed = await git.diffRefs(baseCommit, headCommit, prefix);
+      if (changed.length === 0) {
+        return reply.code(400).send({ error: "Nothing to submit — you have no saved changes yet" });
+      }
+      const touchedPaths = changed.map((entry) => {
+        const relative = entry.path.slice(prefix.length + 1);
+        return scope === "okf" ? okfDocSitePath(relative) : relative.replace(/\.md$/, "");
+      });
+      const permitted = await Promise.all(
+        touchedPaths.map((path) => checkPermission(db, user, bundle, path, "edit")),
+      );
+      if (permitted.some((ok) => !ok)) {
+        return reply.code(403).send({ error: "Forbidden" });
+      }
+
       const existing = await db.query.mergeRequests.findFirst({
         where: and(
           eq(schema.mergeRequests.bundleId, bundle.id),
           eq(schema.mergeRequests.authorId, user.id),
           eq(schema.mergeRequests.branchName, branchName),
+          eq(schema.mergeRequests.scope, scope),
           inArray(schema.mergeRequests.status, OPEN_STATUSES),
         ),
         orderBy: desc(schema.mergeRequests.createdAt),
@@ -152,6 +183,7 @@ export async function mergeRequestRoutes(server: FastifyInstance, db: Database, 
           })
           .where(eq(schema.mergeRequests.id, existing.id))
           .returning();
+        if (updated) await notifyMrSubmitted(db, bundle, updated, user.displayName);
         return updated;
       }
 
@@ -161,11 +193,13 @@ export async function mergeRequestRoutes(server: FastifyInstance, db: Database, 
           bundleId: bundle.id,
           authorId: user.id,
           branchName,
+          scope,
           status: "open",
           baseCommit,
           headCommit,
         })
         .returning();
+      if (created) await notifyMrSubmitted(db, bundle, created, user.displayName);
 
       reply.code(201);
       return created;
@@ -253,7 +287,9 @@ export async function mergeRequestRoutes(server: FastifyInstance, db: Database, 
           }
 
           const [beforeBytes, afterBytes] = await Promise.all([
-            entry.status !== "added" ? git.getFileAtRef(baseRef, entry.path) : Promise.resolve(null),
+            entry.status !== "added"
+              ? git.getFileAtRef(baseRef, entry.path)
+              : Promise.resolve(null),
             entry.status !== "deleted"
               ? git.getFileAtRef(headRef, entry.path)
               : Promise.resolve(null),
@@ -451,15 +487,13 @@ export async function mergeRequestRoutes(server: FastifyInstance, db: Database, 
 
         await db.transaction(async (tx) => {
           await tx.delete(schema.mrConflicts).where(eq(schema.mrConflicts.mrId, mr.id));
-          await tx
-            .insert(schema.mrConflicts)
-            .values(
-              err.files.map((file) => ({
-                mrId: mr.id,
-                path: file.path,
-                markerText: file.markerText,
-              })),
-            );
+          await tx.insert(schema.mrConflicts).values(
+            err.files.map((file) => ({
+              mrId: mr.id,
+              path: file.path,
+              markerText: file.markerText,
+            })),
+          );
           await tx
             .update(schema.mergeRequests)
             .set({ status: "conflict", headCommit: currentHead, updatedAt: new Date() })
@@ -618,15 +652,13 @@ export async function mergeRequestRoutes(server: FastifyInstance, db: Database, 
 
       await db.transaction(async (tx) => {
         await tx.delete(schema.mrConflicts).where(eq(schema.mrConflicts.mrId, mr.id));
-        await tx
-          .insert(schema.mrConflicts)
-          .values(
-            err.files.map((file) => ({
-              mrId: mr.id,
-              path: file.path,
-              markerText: file.markerText,
-            })),
-          );
+        await tx.insert(schema.mrConflicts).values(
+          err.files.map((file) => ({
+            mrId: mr.id,
+            path: file.path,
+            markerText: file.markerText,
+          })),
+        );
         await tx
           .update(schema.mergeRequests)
           .set({ status: "conflict", headCommit: currentHead, updatedAt: new Date() })

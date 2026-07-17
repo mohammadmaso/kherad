@@ -7,6 +7,7 @@
     ".": "./src/index.ts",
     "./auth": "./src/auth/index.ts",
     "./binary-conflict": "./src/binary-conflict.ts",
+    "./conflict-markers": "./src/conflict-markers.ts",
     "./git": "./src/git/index.ts",
     "./page-paths": "./src/page-paths.ts",
     "./markdown": "./src/markdown/index.ts",

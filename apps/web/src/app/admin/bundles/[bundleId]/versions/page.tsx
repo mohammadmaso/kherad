@@ -21,14 +21,18 @@ import {
   TableHeader,
   TableRow,
 } from "@kherad/ui/components/ui/table";
+import { ArrowLeftIcon } from "lucide-react";
+import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import {
   createWikiVersion,
   deleteWikiVersion,
+  fetchBundle,
   fetchWikiCommits,
   fetchWikiVersions,
   restoreWikiVersion,
+  type AdminBundle,
   type WikiCommit,
   type WikiVersion,
 } from "@/lib/api-client";
@@ -38,8 +42,12 @@ function formatTimestamp(iso: string): string {
   return new Date(iso).toLocaleString();
 }
 
-export default function AdminVersionsPage() {
+export default function AdminBundleVersionsPage() {
+  const { bundleId } = useParams<{ bundleId: string }>();
+  const router = useRouter();
   const { t } = useI18n();
+
+  const [bundle, setBundle] = useState<AdminBundle | null>(null);
   const [versions, setVersions] = useState<WikiVersion[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -47,7 +55,7 @@ export default function AdminVersionsPage() {
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
   const [commits, setCommits] = useState<WikiCommit[]>([]);
-  // "" = snapshot the current wiki (main tip); otherwise a picked commit oid.
+  // "" = snapshot the bundle's current pages (main tip); otherwise a picked commit oid.
   const [fromOid, setFromOid] = useState("");
 
   const [restoreTarget, setRestoreTarget] = useState<WikiVersion | null>(null);
@@ -55,7 +63,16 @@ export default function AdminVersionsPage() {
   const [deleteTarget, setDeleteTarget] = useState<WikiVersion | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  const load = useCallback(() => fetchWikiVersions().then(setVersions), []);
+  const load = useCallback(
+    () => fetchWikiVersions(bundleId).then(setVersions),
+    [bundleId],
+  );
+
+  useEffect(() => {
+    fetchBundle(bundleId).then(setBundle, (err) =>
+      setError(err instanceof Error ? err.message : t.admin.loadBundlesFailed),
+    );
+  }, [bundleId, t.admin.loadBundlesFailed]);
 
   useEffect(() => {
     load().catch((err) =>
@@ -64,17 +81,17 @@ export default function AdminVersionsPage() {
   }, [load, t.admin.loadVersionsFailed]);
 
   useEffect(() => {
-    fetchWikiCommits().then(setCommits, (err) =>
+    fetchWikiCommits(bundleId).then(setCommits, (err) =>
       setError(err instanceof Error ? err.message : t.admin.loadCommitsFailed),
     );
-  }, [t.admin.loadCommitsFailed]);
+  }, [bundleId, t.admin.loadCommitsFailed]);
 
   async function handleCreate() {
     setCreating(true);
     setError(null);
     setNotice(null);
     try {
-      const version = await createWikiVersion(name.trim(), fromOid || undefined);
+      const version = await createWikiVersion(bundleId, name.trim(), fromOid || undefined);
       setName("");
       setFromOid("");
       setNotice(t.admin.versionCreated(version.name));
@@ -92,7 +109,7 @@ export default function AdminVersionsPage() {
     setError(null);
     setNotice(null);
     try {
-      const result = await restoreWikiVersion(restoreTarget.name);
+      const result = await restoreWikiVersion(bundleId, restoreTarget.name);
       setNotice(
         result.restored
           ? t.admin.restoreSuccess(result.pagesUpserted, result.pagesDeleted)
@@ -101,7 +118,7 @@ export default function AdminVersionsPage() {
       setRestoreTarget(null);
       await load();
       // Restoring adds a commit on main — refresh the snapshot-source list.
-      fetchWikiCommits().then(setCommits, () => {});
+      fetchWikiCommits(bundleId).then(setCommits, () => {});
     } catch (err) {
       setError(err instanceof Error ? err.message : t.admin.restoreVersionFailed);
       setRestoreTarget(null);
@@ -116,7 +133,7 @@ export default function AdminVersionsPage() {
     setError(null);
     setNotice(null);
     try {
-      await deleteWikiVersion(deleteTarget.name);
+      await deleteWikiVersion(bundleId, deleteTarget.name);
       setDeleteTarget(null);
       await load();
     } catch (err) {
@@ -130,7 +147,18 @@ export default function AdminVersionsPage() {
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <h2 className="text-lg font-semibold">{t.admin.versionsHeading}</h2>
+        <button
+          type="button"
+          onClick={() => router.push("/admin/bundles")}
+          className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1.5 text-sm"
+        >
+          <ArrowLeftIcon className="size-3.5 rtl:rotate-180" />
+          {t.admin.backBundles}
+        </button>
+        <h2 className="mt-1 text-lg font-semibold">
+          {t.admin.versionsHeading}
+          {bundle ? ` — ${bundle.title}` : ""}
+        </h2>
         <p className="text-muted-foreground mt-1 text-sm">{t.admin.versionsDesc}</p>
       </div>
 

@@ -39,18 +39,13 @@ html[data-font="serif"] {
   --font-sans: ui-serif, Georgia, "Times New Roman", var(--font-vazirmatn), serif;
 }
 
-/* Conflict-marker highlighting for the manager-only resolution editor (Monaco decorations). */
-.conflict-marker-line {
-  background-color: color-mix(in oklch, var(--color-amber-500, #f59e0b) 18%, transparent);
-}
-.conflict-marker-text {
-  font-weight: 600;
-}
-.conflict-ours-line {
-  background-color: color-mix(in oklch, var(--destructive) 12%, transparent);
-}
-.conflict-theirs-line {
-  background-color: color-mix(in oklch, oklch(0.72 0.19 149), transparent 88%);
+/* Side-by-side conflict resolver — respect reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  .conflict-hunk,
+  .conflict-hunk * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }
 
 /* ---- Lexical editor ---------------------------------------------------- */

@@ -82,7 +82,7 @@ export default function ResolveConflictPage() {
         mrId,
         conflicts.map((c) => ({ path: c.path, content: resolved[c.path]! })),
       );
-      router.push(`/bundles/${bundleId}/merge-requests/${mrId}`);
+      router.push("/admin/merge-requests");
     } catch (err) {
       setError(err instanceof Error ? err.message : t.mr.completeMergeFailed);
     } finally {
@@ -117,19 +117,19 @@ export default function ResolveConflictPage() {
   }
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-6 p-6">
-      <div className="flex items-center justify-between gap-3">
-        <div>
+    <div className="mx-auto flex max-w-6xl flex-col gap-6 p-4 sm:p-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
           <button
             type="button"
             onClick={() => router.push(`/bundles/${bundleId}/merge-requests/${mrId}`)}
-            className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-sm"
+            className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-sm transition-colors duration-200 ease-[var(--ease-out-spring)]"
           >
             <ArrowLeft className="size-3.5 rtl:rotate-180" />
             {t.mr.backToMr}
           </button>
-          <h1 className="mt-1 text-lg font-semibold">{t.mr.resolveHeading}</h1>
-          <p className="text-muted-foreground text-sm">
+          <h1 className="mt-1.5 text-xl font-semibold tracking-[-0.02em]">{t.mr.resolveHeading}</h1>
+          <p className="text-muted-foreground mt-0.5 text-sm">
             <span dir="auto">{mr.author.displayName}</span>{" "}
             <span className="text-xs" dir="ltr">
               ({mr.author.email})
@@ -137,6 +137,7 @@ export default function ResolveConflictPage() {
           </p>
         </div>
         <Button
+          className="shrink-0 self-start"
           disabled={submitting || unresolvedPaths.length > 0}
           onClick={handleCompleteMerge}
           title={unresolvedPaths.length > 0 ? t.mr.resolveAllTitle : undefined}
@@ -157,7 +158,7 @@ export default function ResolveConflictPage() {
         </Alert>
       ) : null}
 
-      <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-5">
         {conflicts.map((file) => {
           const isResolved = resolved[file.path] !== null;
           const displayName = file.path
@@ -166,9 +167,14 @@ export default function ResolveConflictPage() {
             .replace(/^okf\/[^/]+\//, "")
             .replace(/\.md$/, "");
           return (
-            <div key={file.path} className="border-border overflow-hidden rounded-lg border">
-              <div className="border-border bg-muted/40 flex items-center gap-2 border-b px-3 py-1.5 text-xs font-medium">
-                <span>{displayName}</span>
+            <div
+              key={file.path}
+              className="border-border/80 bg-card/40 overflow-hidden rounded-2xl border"
+            >
+              <div className="border-border/70 bg-muted/30 flex items-center gap-2.5 border-b px-4 py-2.5">
+                <span className="text-foreground/90 truncate text-sm font-medium tracking-[-0.01em]">
+                  {displayName}
+                </span>
                 <Badge variant={isResolved ? "success" : "warning"} className="text-[0.65rem]">
                   {isResolved ? t.mr.resolved : t.mr.unresolved}
                 </Badge>

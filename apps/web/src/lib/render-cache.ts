@@ -8,12 +8,14 @@
  * Bump `RENDER_CACHE_VERSION` whenever the HTML shape changes (e.g. adding the
  * OKF frontmatter panel) so stale entries aren't served after deploy/HMR.
  */
+type RenderCacheEntry = { html: string; markdown: string };
+
 class RenderCache {
-  private readonly entries = new Map<string, string>();
+  private readonly entries = new Map<string, RenderCacheEntry>();
 
   constructor(private readonly maxEntries: number) {}
 
-  get(key: string): string | undefined {
+  get(key: string): RenderCacheEntry | undefined {
     const value = this.entries.get(key);
     if (value === undefined) return undefined;
     this.entries.delete(key);
@@ -21,9 +23,9 @@ class RenderCache {
     return value;
   }
 
-  set(key: string, html: string): void {
+  set(key: string, value: RenderCacheEntry): void {
     this.entries.delete(key);
-    this.entries.set(key, html);
+    this.entries.set(key, value);
     if (this.entries.size > this.maxEntries) {
       const oldestKey = this.entries.keys().next().value;
       if (oldestKey !== undefined) this.entries.delete(oldestKey);
@@ -32,7 +34,7 @@ class RenderCache {
 }
 
 /** Increment when wiki render output changes without a new git commit. */
-export const RENDER_CACHE_VERSION = 3;
+export const RENDER_CACHE_VERSION = 4;
 
 export type RenderCacheKey = {
   bundleId: string;
@@ -62,10 +64,10 @@ if (globalStore.__kheradRenderCacheVersion !== RENDER_CACHE_VERSION) {
 
 export const renderCache = globalStore.__kheradRenderCache!;
 
-export function getCachedRender(key: RenderCacheKey): string | undefined {
+export function getCachedRender(key: RenderCacheKey): RenderCacheEntry | undefined {
   return renderCache.get(toKeyString(key));
 }
 
-export function setCachedRender(key: RenderCacheKey, html: string): void {
-  renderCache.set(toKeyString(key), html);
+export function setCachedRender(key: RenderCacheKey, value: RenderCacheEntry): void {
+  renderCache.set(toKeyString(key), value);
 }

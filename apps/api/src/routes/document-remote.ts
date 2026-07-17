@@ -12,6 +12,7 @@ import { schema, type Database } from "@kherad/db";
 import { eq, isNull } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 
+import { createEmbedder } from "../lib/embedder";
 import { requireAdmin } from "../plugins/auth";
 
 export const DOCUMENT_REMOTE_SETTINGS_ID = "default";
@@ -219,8 +220,9 @@ export async function documentRemoteRoutes(server: FastifyInstance, db: Database
       const activeBundles = await db.query.bundles.findMany({
         where: isNull(schema.bundles.archivedAt),
       });
+      const embedder = await createEmbedder(db);
       for (const bundle of activeBundles) {
-        await reconcileOkfSearchIndex(db, git, bundle);
+        await reconcileOkfSearchIndex(db, git, bundle, embedder);
       }
     }
 

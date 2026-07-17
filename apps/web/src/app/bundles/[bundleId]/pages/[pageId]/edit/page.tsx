@@ -5,8 +5,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@kherad/ui/components/ui/alert";
 import { Button } from "@kherad/ui/components/ui/button";
+import { PlusIcon } from "lucide-react";
 
 import { Editor } from "@/components/editor/editor";
+import { FrontmatterForm } from "@/components/editor/frontmatter-form";
 import { RestoreDraftDialog } from "@/components/editor/restore-draft-dialog";
 import { SaveStatus, type SaveStatusValue } from "@/components/editor/save-status";
 import { SoftLockBanner } from "@/components/editor/soft-lock-banner";
@@ -23,6 +25,7 @@ import {
   type PresenceEntry,
 } from "@/lib/api-client";
 import { useI18n } from "@/lib/i18n/provider";
+import { serializeOkfFrontmatter, splitFrontmatter, type OkfFrontmatter } from "@/lib/okf-frontmatter";
 
 const AUTOSAVE_INTERVAL_MS = 8_000;
 const PRESENCE_INTERVAL_MS = 12_000;
@@ -39,6 +42,7 @@ export default function EditPage() {
   const [page, setPage] = useState<PageContent | null>(null);
   const [draftPrompt, setDraftPrompt] = useState<DraftPrompt>(null);
   const [initialMarkdown, setInitialMarkdown] = useState("");
+  const [frontmatter, setFrontmatter] = useState<OkfFrontmatter | null>(null);
   const [status, setStatus] = useState<SaveStatusValue>("saved");
   const [presence, setPresence] = useState<PresenceEntry[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -47,7 +51,21 @@ export default function EditPage() {
   const [submittedMrId, setSubmittedMrId] = useState<string | null>(null);
 
   const markdownRef = useRef("");
+  const frontmatterRef = useRef<OkfFrontmatter | null>(null);
   const isDirtyRef = useRef(false);
+
+  function combinedMarkdown(): string {
+    return frontmatterRef.current
+      ? serializeOkfFrontmatter(frontmatterRef.current) + markdownRef.current
+      : markdownRef.current;
+  }
+
+  function updateFrontmatter(next: OkfFrontmatter | null) {
+    frontmatterRef.current = next;
+    setFrontmatter(next);
+    isDirtyRef.current = true;
+    setStatus((prev) => (prev === "saving" ? prev : "unsaved"));
+  }
 
   // Dev convenience: bootstrap a JWT from ?token= into localStorage (no login UI yet).
   useEffect(() => {
@@ -76,13 +94,14 @@ export default function EditPage() {
           (!pageContent.lastCommitAt ||
             new Date(draft.updatedAt) > new Date(pageContent.lastCommitAt));
 
+        const split = splitFrontmatter(pageContent.content);
+        frontmatterRef.current = split.frontmatter;
+        setFrontmatter(split.frontmatter);
+        setInitialMarkdown(split.body);
+        markdownRef.current = split.body;
+
         if (draftIsNewer && draftMarkdown !== pageContent.content) {
           setDraftPrompt({ markdown: draftMarkdown, updatedAt: draft.updatedAt });
-          setInitialMarkdown(pageContent.content);
-          markdownRef.current = pageContent.content;
-        } else {
-          setInitialMarkdown(pageContent.content);
-          markdownRef.current = pageContent.content;
         }
       } catch (err) {
         if (!cancelled) {
@@ -104,7 +123,7 @@ export default function EditPage() {
       if (!isDirtyRef.current) return;
       setStatus("autosaving");
       try {
-        await saveAutosaveDraft(pageId, { markdown: markdownRef.current });
+        await saveAutosaveDraft(pageId, { markdown: combinedMarkdown() });
         isDirtyRef.current = false;
         setStatus("autosaved");
       } catch {
@@ -146,7 +165,7 @@ export default function EditPage() {
     setStatus("saving");
     setActionError(null);
     try {
-      const result = await savePageContent(bundleId, pageId, markdownRef.current);
+      const result = await savePageContent(bundleId, pageId, combinedMarkdown());
       isDirtyRef.current = false;
       setStatus("saved");
       setPage((prev) => (prev ? { ...prev, lastCommitAt: result.updatedAt } : prev));
@@ -163,7 +182,7 @@ export default function EditPage() {
       // Autosave only writes Postgres drafts — flush to the user branch so the
       // MR (and a later wiki merge) actually includes the latest editor content.
       setStatus("saving");
-      const result = await savePageContent(bundleId, pageId, markdownRef.current);
+      const result = await savePageContent(bundleId, pageId, combinedMarkdown());
       isDirtyRef.current = false;
       setStatus("saved");
       setPage((prev) => (prev ? { ...prev, lastCommitAt: result.updatedAt } : prev));
@@ -180,8 +199,11 @@ export default function EditPage() {
 
   function handleRestoreDraft() {
     if (!draftPrompt) return;
-    setInitialMarkdown(draftPrompt.markdown);
-    markdownRef.current = draftPrompt.markdown;
+    const split = splitFrontmatter(draftPrompt.markdown);
+    frontmatterRef.current = split.frontmatter;
+    setFrontmatter(split.frontmatter);
+    setInitialMarkdown(split.body);
+    markdownRef.current = split.body;
     isDirtyRef.current = true;
     setStatus("unsaved");
     setDraftPrompt(null);
@@ -254,6 +276,25 @@ export default function EditPage() {
           onDiscard={handleDiscardDraft}
         />
       ) : null}
+
+      {frontmatter ? (
+        <FrontmatterForm
+          value={frontmatter}
+          onChange={updateFrontmatter}
+          resetToken={draftPrompt ? "pending-restore" : "editor"}
+        />
+      ) : (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="border-dashed self-start"
+          onClick={() => updateFrontmatter({ extra: {} })}
+        >
+          <PlusIcon className="size-3.5" />
+          {t.frontmatter.addFrontmatter}
+        </Button>
+      )}
 
       <Editor
         key={draftPrompt ? "pending-restore" : "editor"}

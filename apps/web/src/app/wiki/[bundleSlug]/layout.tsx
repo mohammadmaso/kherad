@@ -28,12 +28,14 @@ export default async function WikiLayout({ children, params }: Props) {
 
   const canManage = await checkPermission(db, viewer, nav.bundle, null, "edit");
 
-  // Whole-wiki snapshots for the reader's version selector. Anyone who can
+  // This bundle's snapshots for the reader's version selector. Anyone who can
   // view the bundle may read it at a version — a snapshot only ever contains
   // published (merged) content.
   let versions: string[] = [];
   try {
-    versions = (await defaultGitEngine().listWikiVersions()).map((version) => version.name);
+    versions = (await defaultGitEngine().listBundleWikiVersions(nav.bundle.slug)).map(
+      (version) => version.name,
+    );
   } catch {
     // Repo missing/uninitialized — the selector just stays hidden.
   }

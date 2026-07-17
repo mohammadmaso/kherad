@@ -52,8 +52,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = (await request.json()) as { pageId: string; contentJson: unknown };
-  const { pageId, contentJson } = body;
+  const body = (await request.json().catch(() => null)) as {
+    pageId?: unknown;
+    contentJson?: unknown;
+  } | null;
+  const pageId = body?.pageId;
+  const contentJson = body?.contentJson;
+  if (typeof pageId !== "string" || contentJson === undefined) {
+    return NextResponse.json({ error: "pageId and contentJson are required" }, { status: 400 });
+  }
 
   const page = await getPageWithBundle(pageId);
   if (!page) {

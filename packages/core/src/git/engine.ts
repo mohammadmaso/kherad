@@ -10,11 +10,11 @@ import { getSourcePageAtRef, getLatestSourcePageAtRef } from "./source";
 import { bundleGitPathPrefix, DOCUMENTS_GIT_PATH_PREFIX, legacyBundleGitPathPrefix } from "./paths";
 import { buildSubtreeMirror, bundleMirrorRefName, documentMirrorRefName } from "./subtree";
 import {
-  createWikiVersion,
-  deleteWikiVersion,
-  listWikiCommits,
-  listWikiVersions,
-  restoreWikiVersion,
+  createBundleWikiVersion,
+  deleteBundleWikiVersion,
+  listBundleWikiCommits,
+  listBundleWikiVersions,
+  restoreBundleWikiVersion,
   type RestoreVersionResult,
   type WikiCommit,
   type WikiVersion,
@@ -145,23 +145,40 @@ export type GitEngine = {
     remote: RemoteFetchTarget,
   ): Promise<SubtreePullResult>;
   /**
-   * Write. Serialized via the repo write lock. Snapshots `fromRef` (default:
-   * `main`; also accepts a full commit oid from `listWikiCommits`) as
-   * `version/<name>`.
+   * Write. Serialized via the repo write lock. Snapshots `bundleSlug`'s
+   * content at `fromRef` (default: `main`; also accepts a full commit oid
+   * from `listBundleWikiCommits`) as `version/<bundleSlug>/<name>` — scoped
+   * to that bundle's subtrees only (`raw/<slug>`, legacy `wiki/<slug>`, and
+   * compiled `okf/<slug>`).
    */
-  createWikiVersion(name: string, author: CommitAuthor, fromRef?: string): Promise<WikiVersion>;
-  /** Read-only. Every `version/*` snapshot, newest first. */
-  listWikiVersions(): Promise<WikiVersion[]>;
-  /** Read-only. Commit history of `ref` (default: main), newest first. */
-  listWikiCommits(ref?: string, depth?: number): Promise<WikiCommit[]>;
+  createBundleWikiVersion(
+    bundleSlug: string,
+    name: string,
+    author: CommitAuthor,
+    fromRef?: string,
+  ): Promise<WikiVersion>;
+  /** Read-only. Every `version/<bundleSlug>/*` snapshot for this bundle, newest first. */
+  listBundleWikiVersions(bundleSlug: string): Promise<WikiVersion[]>;
   /**
-   * Write. Serialized via the repo write lock. Restores `main` to the
-   * version's tree as one new commit (linear history; the pre-restore state
-   * stays reachable). Callers must reconcile Postgres page rows afterwards.
+   * Read-only. Commit history of `ref` (default: main) that touched this
+   * bundle's pages, newest first.
    */
-  restoreWikiVersion(name: string, author: CommitAuthor): Promise<RestoreVersionResult>;
-  /** Write. Serialized via the repo write lock. Deletes the version branch. */
-  deleteWikiVersion(name: string): Promise<void>;
+  listBundleWikiCommits(bundleSlug: string, ref?: string, depth?: number): Promise<WikiCommit[]>;
+  /**
+   * Write. Serialized via the repo write lock. Restores this bundle's
+   * subtrees (`raw/<slug>`, legacy `wiki/<slug>`, compiled `okf/<slug>`) on
+   * `main` to the version's tree as one new commit (linear history; the
+   * pre-restore state stays reachable; every other bundle's content is
+   * untouched). Callers must reconcile Postgres page rows + OKF search index
+   * for this bundle afterwards.
+   */
+  restoreBundleWikiVersion(
+    bundleSlug: string,
+    name: string,
+    author: CommitAuthor,
+  ): Promise<RestoreVersionResult>;
+  /** Write. Serialized via the repo write lock. Deletes the bundle's version branch. */
+  deleteBundleWikiVersion(bundleSlug: string, name: string): Promise<void>;
 };
 
 export function createGitEngine(gitdir: string): GitEngine {
@@ -284,16 +301,19 @@ export function createGitEngine(gitdir: string): GitEngine {
         return { ...result, remoteOid };
       }),
 
-    createWikiVersion: (name, author, fromRef) =>
-      withWriteLock(() => createWikiVersion(gitdir, name, author, fromRef)),
+    createBundleWikiVersion: (bundleSlug, name, author, fromRef) =>
+      withWriteLock(() => createBundleWikiVersion(gitdir, bundleSlug, name, author, fromRef)),
 
-    listWikiVersions: async () => listWikiVersions(gitdir, await listBranches(gitdir)),
+    listBundleWikiVersions: async (bundleSlug) =>
+      listBundleWikiVersions(gitdir, await listBranches(gitdir), bundleSlug),
 
-    listWikiCommits: (ref, depth) => listWikiCommits(gitdir, ref, depth),
+    listBundleWikiCommits: (bundleSlug, ref, depth) =>
+      listBundleWikiCommits(gitdir, bundleSlug, ref, depth),
 
-    restoreWikiVersion: (name, author) =>
-      withWriteLock(() => restoreWikiVersion(gitdir, name, author)),
+    restoreBundleWikiVersion: (bundleSlug, name, author) =>
+      withWriteLock(() => restoreBundleWikiVersion(gitdir, bundleSlug, name, author)),
 
-    deleteWikiVersion: (name) => withWriteLock(() => deleteWikiVersion(gitdir, name)),
+    deleteBundleWikiVersion: (bundleSlug, name) =>
+      withWriteLock(() => deleteBundleWikiVersion(gitdir, bundleSlug, name)),
   };
 }

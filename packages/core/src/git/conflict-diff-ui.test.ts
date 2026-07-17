@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  assembleResolvedText,
-  conflictHunks,
-  parseConflictMarkers,
-} from "../../../../apps/web/src/lib/conflict-diff";
+import { assembleResolvedText, conflictHunks, parseConflictMarkers } from "../conflict-markers";
 
 describe("conflict-diff parser (web UI)", () => {
   it("parses well-formed markers on their own lines", () => {

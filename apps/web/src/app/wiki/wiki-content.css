@@ -186,9 +186,33 @@
 }
 
 .wiki-content pre.mermaid.mermaid-error {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.875rem 1rem;
+  text-align: start;
+  border-color: color-mix(in oklch, var(--destructive) 35%, var(--border));
+  background: color-mix(in oklch, var(--destructive) 6%, var(--card));
+}
+
+.wiki-content pre.mermaid .mermaid-error-message {
+  margin: 0;
   color: var(--destructive);
-  text-align: left;
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.wiki-content pre.mermaid .mermaid-error-source {
+  margin: 0;
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.5rem;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: 0.8em;
+  line-height: 1.45;
   white-space: pre-wrap;
+  overflow-x: auto;
 }
 
 .wiki-content pre.mermaid svg {

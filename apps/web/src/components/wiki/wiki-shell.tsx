@@ -34,7 +34,7 @@ type ShellProps = {
   pageCount: number;
   canManage: boolean;
   isAuthed: boolean;
-  /** Whole-wiki version names (newest first) for the reader's version selector. */
+  /** This bundle's version names (newest first) for the reader's version selector. */
   versions: string[];
   children: React.ReactNode;
 };

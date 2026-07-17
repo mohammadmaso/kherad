@@ -5,8 +5,10 @@ import { ChevronRightIcon, FileClockIcon, PencilIcon } from "lucide-react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
+import { CopyMarkdownButton } from "@/components/wiki/copy-markdown-button";
 import { WikiContent } from "@/components/wiki/wiki-content";
 import { getViewer } from "@/lib/auth";
+import { decodePathSegments } from "@/lib/decode-path-segments";
 import { getDictionary } from "@/lib/i18n/get-dictionary";
 import { getWikiNav } from "@/lib/wiki-nav";
 import { resolveWikiPage } from "@/lib/wiki-render";
@@ -21,7 +23,8 @@ function prettify(segment: string): string {
 }
 
 export default async function WikiPage({ params, searchParams }: Props) {
-  const { bundleSlug, path } = await params;
+  const { bundleSlug, path: rawPath } = await params;
+  const path = decodePathSegments(rawPath);
   const { branch, version } = await searchParams;
   const t = await getDictionary();
 
@@ -66,17 +69,26 @@ export default async function WikiPage({ params, searchParams }: Props) {
   const crumbs = path.slice(0, -1);
   const versionSuffix = result.version ? `?version=${encodeURIComponent(result.version)}` : "";
 
+  const isOkfDoc = result.pageId.startsWith("okf:");
+  const editHref = isOkfDoc
+    ? `/bundles/${result.bundleId}/okf-docs/edit/${path.join("/")}`
+    : `/bundles/${result.bundleId}/pages/${result.pageId}/edit`;
+
   const editButton = result.canEdit ? (
-    <Button
-      variant="outline"
-      size="sm"
-      nativeButton={false}
-      render={<Link href={`/bundles/${result.bundleId}/pages/${result.pageId}/edit`} />}
-    >
+    <Button variant="outline" size="sm" nativeButton={false} render={<Link href={editHref} />}>
       <PencilIcon className="size-3.5" />
       {t.wiki.edit}
     </Button>
   ) : null;
+
+  const copyMarkdownButton =
+    result.kind === "ok" ? (
+      <CopyMarkdownButton
+        markdown={result.markdown}
+        label={t.wiki.copyMarkdown}
+        copiedLabel={t.wiki.copied}
+      />
+    ) : null;
 
   return (
     <article className="mx-auto w-full max-w-3xl px-6 py-8 sm:px-10">
@@ -125,7 +137,10 @@ export default async function WikiPage({ params, searchParams }: Props) {
             </div>
           ) : null}
         </div>
-        {editButton}
+        <div className="flex items-center gap-2">
+          {copyMarkdownButton}
+          {editButton}
+        </div>
       </header>
 
       {result.kind === "unpublished" ? (

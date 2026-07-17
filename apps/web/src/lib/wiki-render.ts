@@ -1,11 +1,11 @@
 import { type AuthedUser } from "@kherad/core/auth";
 import {
+  bundleVersionBranchName,
   defaultGitEngine,
   isValidVersionName,
   okfDocGitPath,
   okfDocSitePath,
   userBranchName,
-  versionBranchName,
 } from "@kherad/core/git";
 import { renderMarkdownToHtml } from "@kherad/core/markdown";
 import { checkPermission } from "@kherad/core/permissions";
@@ -38,6 +38,8 @@ export type WikiPageResult =
       kind: "ok";
       title: string;
       html: string;
+      /** Raw markdown source, for the "Copy markdown" affordance. */
+      markdown: string;
       branch: string;
       isPreview: boolean;
       /** Wiki version name being viewed, if any (content read from `version/<name>`). */
@@ -45,9 +47,10 @@ export type WikiPageResult =
       bundleId: string;
       pageId: string;
       /** Whether the viewer may edit this page — drives the "Edit" affordance only;
-          the editor routes re-check permission themselves. Compiled OKF pages
-          are never editable from the wiki (sources live under /sources), and
-          version snapshots are read-only. */
+          the editor routes re-check permission themselves. Compiled concept docs
+          are never editable from the wiki; a `source/<path>` mirror routes edit
+          to the real underlying `raw` page (see `resolveSourceEditMeta`). Version
+          snapshots are always read-only. */
       canEdit: boolean;
     };
 
@@ -159,6 +162,48 @@ function prettifySegment(segment: string): string {
 }
 
 /**
+ * A wiki "source mirror" page (`source/<path>`) has no Postgres row of its
+ * own — the compiled OKF doc is what's rendered — but it mirrors a real,
+ * editable `raw` page. Look that page up so the wiki view can still offer a
+ * working "Edit" affordance pointing at the actual editable copy. Version
+ * snapshots are read-only, so callers skip this entirely when `version` is set.
+ */
+async function resolveSourceEditMeta(
+  bundle: typeof schema.bundles.$inferSelect,
+  sourcePagePath: string,
+  viewer: AuthedUser | null,
+): Promise<{ pageId: string; canEdit: boolean } | null> {
+  const page = await db.query.pages.findFirst({
+    where: and(
+      eq(schema.pages.bundleId, bundle.id),
+      eq(schema.pages.source, "raw"),
+      eq(schema.pages.path, sourcePagePath),
+    ),
+  });
+  if (!page || page.isDeleted) return null;
+  const canEdit = viewer
+    ? await checkPermission(db, viewer, bundle, sourcePagePath, "edit")
+    : false;
+  return { pageId: page.id, canEdit };
+}
+
+/**
+ * Edit eligibility for a real compiled OKF concept doc (not a source mirror).
+ * `log.md` is system-generated (the indexer's update history) and never
+ * hand-editable; version snapshots are always read-only.
+ */
+async function resolveConceptEditMeta(
+  bundle: typeof schema.bundles.$inferSelect,
+  sitePath: string,
+  viewer: AuthedUser | null,
+  version: string | null,
+): Promise<{ pageId: string; canEdit: boolean } | null> {
+  if (version || sitePath === "log") return null;
+  const canEdit = viewer ? await checkPermission(db, viewer, bundle, sitePath, "edit") : false;
+  return { pageId: `okf:${sitePath}`, canEdit };
+}
+
+/**
  * Resolves a compiled OKF document for the public wiki surface. No Postgres
  * `pages` row — the approved `okf/<slug>` tree is the source of truth.
  */
@@ -180,7 +225,7 @@ async function resolveOkfWikiPage(
       ? {
           kind: "unpublished",
           title,
-          branch: versionBranchName(version),
+          branch: bundleVersionBranchName(bundle.slug, version),
           version,
           bundleId: bundle.id,
           pageId: `okf:${sitePath}`,
@@ -189,7 +234,7 @@ async function resolveOkfWikiPage(
       : { kind: "not-found" };
 
   const git = defaultGitEngine();
-  const branch = version ? versionBranchName(version) : bundle.defaultBranch;
+  const branch = version ? bundleVersionBranchName(bundle.slug, version) : bundle.defaultBranch;
   const commitOid = await git.getRefOid(branch);
   if (!commitOid) return notInSnapshot(fallbackTitle);
 
@@ -221,6 +266,7 @@ async function resolveOkfWikiPage(
       // resource links like /wiki/welcome/kk don't 404.
       const rawBytes = await rawFallback(sitePath);
       if (rawBytes !== null) {
+        const editMeta = version ? null : await resolveSourceEditMeta(bundle, sitePath, viewer);
         return renderOkfMarkdown({
           bundle,
           sitePath: sourceSitePath,
@@ -230,6 +276,7 @@ async function resolveOkfWikiPage(
           markdown: new TextDecoder().decode(rawBytes),
           isSourceMirror: true,
           resourceUrl: null,
+          editMeta,
         });
       }
       return notInSnapshot(fallbackTitle);
@@ -240,28 +287,37 @@ async function resolveOkfWikiPage(
   const gitPath = okfDocGitPath(bundle.slug, docPath);
   const cacheKey = { bundleId: bundle.id, path: `okf:${sitePath}`, branch, commitOid };
   const cached = getCachedRender(cacheKey);
+  const isSourcePath = sitePath.startsWith("source/");
 
   if (cached !== undefined) {
+    // Edit eligibility is per-viewer and never cached, even on an HTML hit.
+    const editMeta = isSourcePath
+      ? !version
+        ? await resolveSourceEditMeta(bundle, sitePath.slice("source/".length), viewer)
+        : null
+      : await resolveConceptEditMeta(bundle, sitePath, viewer, version);
     return {
       kind: "ok",
       title: fallbackTitle,
-      html: cached,
+      html: cached.html,
+      markdown: cached.markdown,
       branch,
       isPreview: false,
       version,
       bundleId: bundle.id,
-      pageId: `okf:${sitePath}`,
-      canEdit: false,
+      pageId: editMeta?.pageId ?? `okf:${sitePath}`,
+      canEdit: editMeta?.canEdit ?? false,
     };
   }
 
   const contentBytes = await git.getFileAtRef(branch, gitPath);
 
   // `/wiki/<slug>/source/<page>` with no mirror yet → fall back to live raw.
-  if (contentBytes === null && sitePath.startsWith("source/")) {
+  if (contentBytes === null && isSourcePath) {
     const pagePath = sitePath.slice("source/".length);
     const rawBytes = await rawFallback(pagePath);
     if (rawBytes !== null) {
+      const editMeta = version ? null : await resolveSourceEditMeta(bundle, pagePath, viewer);
       return renderOkfMarkdown({
         bundle,
         sitePath,
@@ -271,6 +327,7 @@ async function resolveOkfWikiPage(
         markdown: new TextDecoder().decode(rawBytes),
         isSourceMirror: true,
         resourceUrl: null,
+        editMeta,
       });
     }
     return notInSnapshot(fallbackTitle);
@@ -286,6 +343,12 @@ async function resolveOkfWikiPage(
         .replace(new RegExp(`^/wiki/${bundle.slug}/(?!source/)`), `/wiki/${bundle.slug}/source/`)
     : null;
 
+  const editMeta = isSourcePath
+    ? !version
+      ? await resolveSourceEditMeta(bundle, sitePath.slice("source/".length), viewer)
+      : null
+    : await resolveConceptEditMeta(bundle, sitePath, viewer, version);
+
   return renderOkfMarkdown({
     bundle,
     sitePath,
@@ -293,8 +356,9 @@ async function resolveOkfWikiPage(
     version,
     commitOid,
     markdown,
-    isSourceMirror: sitePath.startsWith("source/"),
+    isSourceMirror: isSourcePath,
     resourceUrl,
+    editMeta,
   });
 }
 
@@ -307,9 +371,20 @@ async function renderOkfMarkdown(args: {
   markdown: string;
   isSourceMirror: boolean;
   resourceUrl: string | null;
+  /** The real editable page behind a source-mirror path, or the concept doc itself. */
+  editMeta: { pageId: string; canEdit: boolean } | null;
 }): Promise<Extract<WikiPageResult, { kind: "ok" }>> {
-  const { bundle, sitePath, branch, version, commitOid, markdown, isSourceMirror, resourceUrl } =
-    args;
+  const {
+    bundle,
+    sitePath,
+    branch,
+    version,
+    commitOid,
+    markdown,
+    isSourceMirror,
+    resourceUrl,
+    editMeta,
+  } = args;
   const fallbackTitle = prettifySegment(sitePath.split("/").pop() ?? sitePath);
   const cacheKey = { bundleId: bundle.id, path: `okf:${sitePath}`, branch, commitOid };
   const cached = getCachedRender(cacheKey);
@@ -317,13 +392,14 @@ async function renderOkfMarkdown(args: {
     return {
       kind: "ok",
       title: titleFromOkfMarkdown(markdown, fallbackTitle),
-      html: cached,
+      html: cached.html,
+      markdown: cached.markdown,
       branch,
       isPreview: false,
       version,
       bundleId: bundle.id,
-      pageId: `okf:${sitePath}`,
-      canEdit: false,
+      pageId: editMeta?.pageId ?? `okf:${sitePath}`,
+      canEdit: editMeta?.canEdit ?? false,
     };
   }
 
@@ -338,18 +414,19 @@ async function renderOkfMarkdown(args: {
   } else if (resourceUrl && !isSourceMirror) {
     html = sourceLinkHtml(resourceUrl) + html;
   }
-  setCachedRender(cacheKey, html);
+  setCachedRender(cacheKey, { html, markdown });
 
   return {
     kind: "ok",
     title,
     html,
+    markdown,
     branch,
     isPreview: false,
     version,
     bundleId: bundle.id,
-    pageId: `okf:${sitePath}`,
-    canEdit: false,
+    pageId: editMeta?.pageId ?? `okf:${sitePath}`,
+    canEdit: editMeta?.canEdit ?? false,
   };
 }
 
@@ -361,7 +438,7 @@ async function renderOkfMarkdown(args: {
  *   (with legacy `wiki/<slug>` fallback).
  */
 /**
- * Raw page at a whole-wiki version snapshot. Git is the source of truth here
+ * Raw page at a bundle version snapshot. Git is the source of truth here
  * — a Postgres row only lends its title/id. Pages deleted since the snapshot
  * still render (no tombstone/redirect), and snapshot pages that never had a
  * row fall back to a filename-derived title. Snapshots are read-only, so
@@ -372,7 +449,7 @@ async function resolveRawVersionPage(
   pagePath: string,
   version: string,
 ): Promise<WikiPageResult> {
-  const branch = versionBranchName(version);
+  const branch = bundleVersionBranchName(bundle.slug, version);
   const git = defaultGitEngine();
   const commitOid = await git.getRefOid(branch);
   if (!commitOid) return { kind: "not-found" };
@@ -391,7 +468,15 @@ async function resolveRawVersionPage(
   const cacheKey = { bundleId: bundle.id, path: pagePath, branch, commitOid };
   const cached = getCachedRender(cacheKey);
   if (cached !== undefined) {
-    return { kind: "ok", title, html: cached, branch, isPreview: false, ...okMeta };
+    return {
+      kind: "ok",
+      title,
+      html: cached.html,
+      markdown: cached.markdown,
+      branch,
+      isPreview: false,
+      ...okMeta,
+    };
   }
 
   const contentBytes = await git.getSourcePageAtRef(branch, bundle.slug, pagePath);
@@ -403,9 +488,9 @@ async function resolveRawVersionPage(
 
   const markdown = new TextDecoder().decode(contentBytes);
   const html = await renderMarkdownToHtml(markdown);
-  setCachedRender(cacheKey, html);
+  setCachedRender(cacheKey, { html, markdown });
 
-  return { kind: "ok", title, html, branch, isPreview: false, ...okMeta };
+  return { kind: "ok", title, html, markdown, branch, isPreview: false, ...okMeta };
 }
 
 export async function resolveWikiPage(
@@ -418,13 +503,15 @@ export async function resolveWikiPage(
   const bundle = await db.query.bundles.findFirst({ where: eq(schema.bundles.slug, bundleSlug) });
   if (!bundle || bundle.archivedAt) return { kind: "not-found" };
 
-  // Reading at a whole-wiki version snapshot (`version/<name>` branch). A
-  // version is published-only content, so viewing it needs no extra
-  // permission beyond "view"; it wins over `?branch=` previews.
+  // Reading at a bundle version snapshot (`version/<bundleSlug>/<name>`
+  // branch). A version is published-only content, so viewing it needs no
+  // extra permission beyond "view"; it wins over `?branch=` previews.
   let version: string | null = null;
   if (versionParam) {
     if (!isValidVersionName(versionParam)) return { kind: "not-found" };
-    const oid = await defaultGitEngine().getRefOid(versionBranchName(versionParam));
+    const oid = await defaultGitEngine().getRefOid(
+      bundleVersionBranchName(bundle.slug, versionParam),
+    );
     if (oid === null) return { kind: "not-found" };
     version = versionParam;
   }
@@ -483,7 +570,15 @@ export async function resolveWikiPage(
   const cacheKey = { bundleId: bundle.id, path: pagePath, branch, commitOid };
   const cached = getCachedRender(cacheKey);
   if (cached !== undefined) {
-    return { kind: "ok", title: page.title, html: cached, branch, isPreview, ...okMeta };
+    return {
+      kind: "ok",
+      title: page.title,
+      html: cached.html,
+      markdown: cached.markdown,
+      branch,
+      isPreview,
+      ...okMeta,
+    };
   }
 
   const contentBytes = await git.getSourcePageAtRef(branch, bundle.slug, pagePath);
@@ -491,9 +586,9 @@ export async function resolveWikiPage(
 
   const markdown = new TextDecoder().decode(contentBytes);
   const html = await renderMarkdownToHtml(markdown);
-  setCachedRender(cacheKey, html);
+  setCachedRender(cacheKey, { html, markdown });
 
-  return { kind: "ok", title: page.title, html, branch, isPreview, ...okMeta };
+  return { kind: "ok", title: page.title, html, markdown, branch, isPreview, ...okMeta };
 }
 
 /** Re-export for callers that need to map an OKF git doc path to a site path. */

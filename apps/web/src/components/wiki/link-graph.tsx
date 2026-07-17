@@ -184,7 +184,9 @@ function computeRevealOrder(graph: BundleGraph): Map<string, number> {
   }
 
   const order = new Map<string, number>();
-  const remaining = [...graph.nodes].sort((a, b) => (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0));
+  const remaining = [...graph.nodes].sort(
+    (a, b) => (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0),
+  );
 
   for (const seed of remaining) {
     if (order.has(seed.id)) continue;
@@ -248,15 +250,12 @@ export function LinkGraph({ bundleId, bundleSlug, bundleTitle }: LinkGraphProps)
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const panRef = useRef({ active: false, moved: false, lastX: 0, lastY: 0 });
-  const dragRef = useRef<{ id: string; moved: boolean; lastX: number; lastY: number } | null>(
-    null,
-  );
+  const dragRef = useRef<{ id: string; moved: boolean; lastX: number; lastY: number } | null>(null);
 
   const [graph, setGraph] = useState<BundleGraph | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [size, setSize] = useState({ width: 900, height: MIN_HEIGHT });
   const [view, setView] = useState<Viewport>({ x: 0, y: 0, scale: 1 });
-  const [fitView, setFitView] = useState<Viewport>({ x: 0, y: 0, scale: 1 });
   const [hovered, setHovered] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -315,12 +314,22 @@ export function LinkGraph({ bundleId, bundleSlug, bundleTitle }: LinkGraphProps)
     [graph],
   );
 
-  useEffect(() => {
-    if (baseNodes.length === 0) return;
-    const next = computeFitView(baseNodes, size.width, size.height);
-    setFitView(next);
-    setView(next);
-  }, [baseNodes, size.width, size.height]);
+  const fitView = useMemo<Viewport>(
+    () =>
+      baseNodes.length > 0
+        ? computeFitView(baseNodes, size.width, size.height)
+        : { x: 0, y: 0, scale: 1 },
+    [baseNodes, size.width, size.height],
+  );
+
+  // Snap the viewport to the recomputed fit whenever the layout changes (data
+  // load, container resize) — adjusted during render rather than in an effect
+  // so the graph never paints a frame at the stale viewport first.
+  const [prevFitView, setPrevFitView] = useState(fitView);
+  if (fitView !== prevFitView) {
+    setPrevFitView(fitView);
+    if (baseNodes.length > 0) setView(fitView);
+  }
 
   const normalizedQuery = query.trim().toLowerCase();
   const searchMatches = useMemo(() => {
@@ -431,27 +440,30 @@ export function LinkGraph({ bundleId, bundleSlug, bundleTitle }: LinkGraphProps)
     [],
   );
 
-  const handleNodePointerMove = useCallback((event: React.PointerEvent<SVGGElement>) => {
-    const drag = dragRef.current;
-    const svg = svgRef.current;
-    if (!drag || !svg) return;
+  const handleNodePointerMove = useCallback(
+    (event: React.PointerEvent<SVGGElement>) => {
+      const drag = dragRef.current;
+      const svg = svgRef.current;
+      if (!drag || !svg) return;
 
-    const dx = event.clientX - drag.lastX;
-    const dy = event.clientY - drag.lastY;
-    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) drag.moved = true;
-    drag.lastX = event.clientX;
-    drag.lastY = event.clientY;
+      const dx = event.clientX - drag.lastX;
+      const dy = event.clientY - drag.lastY;
+      if (Math.abs(dx) > 1 || Math.abs(dy) > 1) drag.moved = true;
+      drag.lastX = event.clientX;
+      drag.lastY = event.clientY;
 
-    const rect = svg.getBoundingClientRect();
-    const factor = size.width / rect.width / view.scale;
-    setOverrides((prev) => {
-      const next = new Map(prev);
-      const base = prev.get(drag.id) ?? nodeById.get(drag.id);
-      if (!base) return prev;
-      next.set(drag.id, { x: base.x + dx * factor, y: base.y + dy * factor });
-      return next;
-    });
-  }, [size.width, view.scale, nodeById]);
+      const rect = svg.getBoundingClientRect();
+      const factor = size.width / rect.width / view.scale;
+      setOverrides((prev) => {
+        const next = new Map(prev);
+        const base = prev.get(drag.id) ?? nodeById.get(drag.id);
+        if (!base) return prev;
+        next.set(drag.id, { x: base.x + dx * factor, y: base.y + dy * factor });
+        return next;
+      });
+    },
+    [size.width, view.scale, nodeById],
+  );
 
   const handleNodePointerUp = useCallback(
     (event: React.PointerEvent<SVGGElement>, nodeId: string) => {

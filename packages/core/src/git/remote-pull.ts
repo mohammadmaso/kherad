@@ -9,13 +9,11 @@ import {
   setConfig,
   writeCommit,
   writeRef,
-  writeTree,
-  type TreeEntry,
 } from "isomorphic-git";
 
 import { isNotFoundError } from "./content";
 import { toGitSignature } from "./repo";
-import { resolveSubtreeOid } from "./subtree";
+import { graftSubtree, resolveSubtreeOid } from "./subtree";
 import type { CommitAuthor, RemoteFetchTarget } from "./types";
 
 export class RemotePullError extends Error {
@@ -76,47 +74,6 @@ export async function fetchRemoteHead(gitdir: string, target: RemoteFetchTarget)
     throw new RemotePullError(`Branch "${target.branch}" not found on remote`);
   }
   return result.fetchHead;
-}
-
-/**
- * Rewrites `pathSegments` within `baseTreeOid` to point at `subtreeOid`
- * (`null` removes the entry), creating intermediate directories as needed,
- * and returns the new root tree oid. Sibling entries are untouched.
- */
-async function graftSubtree(
-  gitdir: string,
-  baseTreeOid: string | undefined,
-  pathSegments: string[],
-  subtreeOid: string | null,
-): Promise<string> {
-  const [head, ...rest] = pathSegments;
-  if (!head) throw new Error("graftSubtree requires a non-empty path");
-
-  let entries: TreeEntry[] = [];
-  if (baseTreeOid) {
-    entries = (await readTree({ fs, gitdir, oid: baseTreeOid })).tree;
-  }
-  const byName = new Map(entries.map((entry) => [entry.path, entry]));
-
-  if (rest.length === 0) {
-    if (subtreeOid === null) {
-      byName.delete(head);
-    } else {
-      byName.set(head, { mode: "040000", path: head, oid: subtreeOid, type: "tree" });
-    }
-  } else {
-    const existing = byName.get(head);
-    const childBase = existing?.type === "tree" ? existing.oid : undefined;
-    const childOid = await graftSubtree(gitdir, childBase, rest, subtreeOid);
-    const childEntries = (await readTree({ fs, gitdir, oid: childOid })).tree;
-    if (childEntries.length === 0) {
-      byName.delete(head);
-    } else {
-      byName.set(head, { mode: "040000", path: head, oid: childOid, type: "tree" });
-    }
-  }
-
-  return writeTree({ fs, gitdir, tree: Array.from(byName.values()) });
 }
 
 export type ApplyRemoteSubtreeResult = {

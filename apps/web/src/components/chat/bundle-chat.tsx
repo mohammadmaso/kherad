@@ -11,10 +11,11 @@ import {
 } from "@kherad/ui/components/ui/dropdown-menu";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import { HistoryIcon, SparklesIcon, SquarePenIcon, XIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   API_URL,
+  fetchBundlePages,
   fetchChatThread,
   fetchChatThreads,
   getToken,
@@ -23,14 +24,23 @@ import {
 import { useI18n } from "@/lib/i18n/provider";
 
 import {
+  buildMentionMessageParts,
+  MessageMentionChips,
+  type MentionPage,
+} from "@/components/chat/page-mentions";
+
+import {
   Conversation,
   ConversationContent,
   ConversationScrollButton,
 } from "@/components/ai-elements/conversation";
 import { Loader } from "@/components/ai-elements/loader";
 import { Message, MessageContent } from "@/components/ai-elements/message";
+import {
+  hasVisibleAssistantContent,
+  MessageParts,
+} from "@/components/ai-elements/message-parts";
 import { PromptInput } from "@/components/ai-elements/prompt-input";
-import { Response } from "@/components/ai-elements/response";
 
 type ChatBundle = { id: string; slug: string; title: string };
 
@@ -53,6 +63,28 @@ export function BundleChat({
   const [threadId, setThreadId] = useState<string | null>(null);
   const [threads, setThreads] = useState<ChatThreadSummary[] | null>(null);
   const [loadingThread, setLoadingThread] = useState(false);
+  const [mentionPages, setMentionPages] = useState<MentionPage[]>([]);
+
+  // Pages offered by the "@" mention picker — the panel is mounted lazily,
+  // so this only fetches once the user actually opens the chat.
+  useEffect(() => {
+    let cancelled = false;
+    fetchBundlePages(bundle.id)
+      .then((pages) => {
+        if (cancelled) return;
+        setMentionPages(
+          pages
+            .filter((page) => !page.isDeleted && !page.redirectTo)
+            .map((page) => ({ bundleSlug: bundle.slug, path: page.path, title: page.title })),
+        );
+      })
+      .catch(() => {
+        // Mentions are an enhancement; chat works without them.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bundle.id, bundle.slug]);
 
   const transport = useMemo(
     () =>
@@ -175,15 +207,35 @@ export function BundleChat({
           {messages.map((message) => (
             <Message key={message.id} from={message.role === "user" ? "user" : "assistant"}>
               <MessageContent from={message.role === "user" ? "user" : "assistant"}>
-                {message.parts.map((part, i) =>
-                  part.type === "text" ? (
-                    <Response key={`${message.id}-${i}`}>{part.text}</Response>
-                  ) : null,
+                {message.role === "user" ? <MessageMentionChips parts={message.parts} /> : null}
+                {message.role === "assistant" ? (
+                  <MessageParts
+                    parts={message.parts}
+                    messageId={message.id}
+                    reasoningLabel={t.chat.reasoningLabel}
+                  />
+                ) : (
+                  message.parts.map((part, i) =>
+                    part.type === "text" ? (
+                      <span key={`${message.id}-${i}`} className="whitespace-pre-wrap">
+                        {part.text}
+                      </span>
+                    ) : null,
+                  )
                 )}
               </MessageContent>
             </Message>
           ))}
-          {status === "submitted" || loadingThread ? <Loader label={t.chat.thinking} /> : null}
+          {(() => {
+            const last = messages[messages.length - 1];
+            const lastAssistant = last?.role === "assistant" ? last : null;
+            const showThinking =
+              loadingThread ||
+              status === "submitted" ||
+              (status === "streaming" &&
+                (!lastAssistant || !hasVisibleAssistantContent(lastAssistant.parts)));
+            return showThinking ? <Loader label={t.chat.thinking} /> : null;
+          })()}
           {error ? <p className="text-destructive text-xs">{t.chat.error}</p> : null}
         </ConversationContent>
         <ConversationScrollButton label={t.chat.scrollToBottom} />
@@ -196,7 +248,18 @@ export function BundleChat({
           stopLabel={t.chat.stop}
           status={status}
           disabled={loadingThread}
-          onSubmit={(text) => void sendMessage({ text })}
+          mentionPages={mentionPages}
+          mentionLabels={{
+            add: t.chat.mentionAdd,
+            searchPlaceholder: t.chat.mentionSearch,
+            empty: t.chat.mentionEmpty,
+          }}
+          onSubmit={(text, mentions) =>
+            void sendMessage({
+              role: "user",
+              parts: buildMentionMessageParts(text, mentions),
+            })
+          }
           onStop={() => void stop()}
         />
         {busy ? null : (

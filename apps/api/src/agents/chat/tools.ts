@@ -1,10 +1,13 @@
 import { okfGitPathPrefix, type GitEngine } from "@kherad/core/git";
+import type { Database } from "@kherad/db";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 
-import { validateDocPath } from "../indexer/tools";
+import { createEmbedder } from "../../lib/embedder";
+import { validateDocPath } from "../../lib/okf-doc";
+import { createSearchTools } from "../search-tools";
 
-type Bundle = { slug: string; defaultBranch: string };
+type Bundle = { id: string; slug: string; defaultBranch: string; isPublic: boolean };
 
 const decoder = new TextDecoder();
 
@@ -12,8 +15,12 @@ const decoder = new TextDecoder();
  * Read-only progressive-disclosure tools over the *merged* OKF bundle —
  * the chat agent only ever sees human-approved knowledge.
  */
-export function createChatTools(args: { git: GitEngine; bundle: Bundle }) {
-  const { git, bundle } = args;
+export function createChatTools(args: {
+  db: Database;
+  git: GitEngine;
+  bundle: Bundle;
+}) {
+  const { db, git, bundle } = args;
   const okfPrefix = okfGitPathPrefix(bundle.slug);
 
   const readIndex = createTool({
@@ -52,5 +59,16 @@ export function createChatTools(args: { git: GitEngine; bundle: Bundle }) {
     },
   });
 
-  return { read_index: readIndex, list_docs: listDocs, read_doc: readDoc };
+  const searchTools = createSearchTools({
+    db,
+    embedderFactory: () => createEmbedder(db),
+    scope: { kind: "bundle", bundle, source: "okf" },
+  });
+
+  return {
+    read_index: readIndex,
+    list_docs: listDocs,
+    read_doc: readDoc,
+    ...searchTools,
+  };
 }

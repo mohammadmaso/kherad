@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
-import { clearToken, fetchMyBundles, getToken, hasValidSession, type MyBundle } from "@/lib/api-client";
+import { fetchMyBundles, getToken, hasValidSession, type MyBundle } from "@/lib/api-client";
 import { useI18n } from "@/lib/i18n/provider";
 
 const ROLE_BADGE_VARIANT: Record<MyBundle["role"], "default" | "secondary" | "outline"> = {

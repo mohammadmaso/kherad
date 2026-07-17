@@ -1,108 +1,16 @@
-export type OkfFrontmatter = {
-  type?: string;
-  title?: string;
-  description?: string;
-  resource?: string;
-  tags?: string[];
-  timestamp?: string;
-  /** Any additional scalar or list fields from the YAML block. */
-  extra: Record<string, string | string[]>;
-};
+/**
+ * OKF frontmatter parsing/serialization lives in `@kherad/core/markdown`.
+ * This module re-exports those plus the HTML renderer used by wiki SSR.
+ */
+export {
+  parseOkfFrontmatter,
+  serializeOkfFrontmatter,
+  splitFrontmatter,
+  stripFrontmatter,
+  type OkfFrontmatter,
+} from "@kherad/core/markdown";
 
-const KNOWN_KEYS = new Set(["type", "title", "description", "resource", "tags", "timestamp"]);
-
-function unquote(value: string): string {
-  const trimmed = value.trim();
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
-}
-
-function parseInlineList(value: string): string[] | null {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) return null;
-  const inner = trimmed.slice(1, -1).trim();
-  if (!inner) return [];
-  return inner.split(",").map((part) => unquote(part.trim())).filter(Boolean);
-}
-
-function parseFrontmatterBlock(raw: string): Record<string, string | string[]> {
-  const result: Record<string, string | string[]> = {};
-  let pendingListKey: string | null = null;
-  let listItems: string[] = [];
-
-  const flushList = () => {
-    if (pendingListKey && listItems.length > 0) {
-      result[pendingListKey] = listItems;
-    }
-    pendingListKey = null;
-    listItems = [];
-  };
-
-  for (const line of raw.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    const listMatch = /^-\s+(.+)$/.exec(trimmed);
-    if (listMatch && pendingListKey) {
-      listItems.push(unquote(listMatch[1] ?? ""));
-      continue;
-    }
-
-    const kvMatch = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(trimmed);
-    if (!kvMatch) continue;
-
-    flushList();
-    const key = kvMatch[1]!;
-    const value = kvMatch[2] ?? "";
-
-    if (!value) {
-      pendingListKey = key;
-      continue;
-    }
-
-    const inlineList = parseInlineList(value);
-    if (inlineList) {
-      result[key] = inlineList;
-      continue;
-    }
-
-    result[key] = unquote(value);
-  }
-
-  flushList();
-  return result;
-}
-
-/** Extracts the OKF YAML block when present. */
-export function parseOkfFrontmatter(markdown: string): OkfFrontmatter | null {
-  if (!markdown.startsWith("---")) return null;
-  const end = markdown.indexOf("\n---", 3);
-  if (end < 0) return null;
-
-  const parsed = parseFrontmatterBlock(markdown.slice(3, end));
-  if (Object.keys(parsed).length === 0) return null;
-
-  const extra: Record<string, string | string[]> = {};
-  for (const [key, value] of Object.entries(parsed)) {
-    if (!KNOWN_KEYS.has(key)) extra[key] = value;
-  }
-
-  const tags = parsed.tags;
-  return {
-    type: typeof parsed.type === "string" ? parsed.type : undefined,
-    title: typeof parsed.title === "string" ? parsed.title : undefined,
-    description: typeof parsed.description === "string" ? parsed.description : undefined,
-    resource: typeof parsed.resource === "string" ? parsed.resource : undefined,
-    tags: Array.isArray(tags) ? tags : undefined,
-    timestamp: typeof parsed.timestamp === "string" ? parsed.timestamp : undefined,
-    extra,
-  };
-}
+import type { OkfFrontmatter } from "@kherad/core/markdown";
 
 function escapeHtml(text: string): string {
   return text

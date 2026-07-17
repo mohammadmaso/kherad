@@ -10,6 +10,7 @@ import { schema, type Database } from "@kherad/db";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 
+import { createEmbedder } from "../lib/embedder";
 import { getBundleOrNull } from "../lib/get-bundle";
 import { requireAdmin } from "../plugins/auth";
 
@@ -211,7 +212,7 @@ export async function bundleRemoteRoutes(server: FastifyInstance, db: Database, 
       // Pulled files bypass the page CRUD routes, so rebuild the pages
       // metadata + search index from the git tree.
       const pages = result.changed
-        ? await reconcileRawPagesFromGit(db, git, bundle)
+        ? await reconcileRawPagesFromGit(db, git, bundle, await createEmbedder(db))
         : { upserted: 0, deleted: 0 };
 
       const [updated] = await db

@@ -35,12 +35,7 @@ export async function allocatePagePath(
  * `(bundleId, source, path)` so creating a page at a tombstoned path revives
  * the old row (clearing its redirect) rather than hitting the unique index.
  */
-export async function upsertRawPage(
-  db: Database,
-  bundleId: string,
-  path: string,
-  title: string,
-) {
+export async function upsertRawPage(db: Database, bundleId: string, path: string, title: string) {
   const [page] = await db
     .insert(schema.pages)
     .values({ bundleId, path, title, isDeleted: false })

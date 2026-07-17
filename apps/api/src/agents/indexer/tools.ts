@@ -1,23 +1,14 @@
-import { normalizePagePath, okfGitPathPrefix, type GitEngine } from "@kherad/core/git";
+import { okfGitPathPrefix, type GitEngine } from "@kherad/core/git";
 import { schema, type Database } from "@kherad/db";
 import { createTool } from "@mastra/core/tools";
 import { and, eq, isNull } from "drizzle-orm";
-import matter from "gray-matter";
 import { z } from "zod";
+
+import { RESERVED_DOCS, requireFrontmatterType, validateDocPath } from "../../lib/okf-doc";
 
 type Bundle = { id: string; slug: string; defaultBranch: string };
 
 const decoder = new TextDecoder();
-
-/** Reserved OKF filenames that skip the frontmatter-`type` requirement. */
-const RESERVED_DOCS = new Set(["index.md", "log.md"]);
-
-export function validateDocPath(rawPath: string): string | null {
-  const withoutExt = rawPath.endsWith(".md") ? rawPath.slice(0, -".md".length) : null;
-  if (!withoutExt) return null;
-  const normalized = normalizePagePath(withoutExt);
-  return normalized ? `${normalized}.md` : null;
-}
 
 /**
  * Source-page query shared by the tool and the kickoff-prompt builder:
@@ -129,20 +120,9 @@ export function createIndexerTools(args: {
         };
       }
 
-      if (!RESERVED_DOCS.has(validPath)) {
-        let parsed: ReturnType<typeof matter>;
-        try {
-          parsed = matter(content);
-        } catch (err) {
-          return { error: `Frontmatter is not valid YAML: ${String(err)}. Fix it and retry.` };
-        }
-        const type = parsed.data?.type;
-        if (typeof type !== "string" || !type.trim()) {
-          return {
-            error:
-              "Missing required frontmatter field `type`. Every concept document needs a `---` YAML block with a non-empty `type`.",
-          };
-        }
+      const frontmatterError = requireFrontmatterType(validPath, content);
+      if (frontmatterError) {
+        return { error: frontmatterError };
       }
 
       pending.set(validPath, content);

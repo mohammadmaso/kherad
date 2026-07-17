@@ -18,14 +18,18 @@ import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { CompilePanel } from "@/components/compile/compile-panel";
+import { DocTree } from "@/components/wiki/doc-tree";
 import {
   createPage,
   fetchBundle,
   fetchBundlePages,
+  fetchOkfDocs,
   type AdminBundle,
+  type OkfDocSummary,
   type PageSummary,
 } from "@/lib/api-client";
 import { pagePathFromTitle } from "@kherad/core/page-paths";
+import { buildTree } from "@/lib/page-tree";
 import { useI18n } from "@/lib/i18n/provider";
 
 export default function BundleDetailPage() {
@@ -35,6 +39,7 @@ export default function BundleDetailPage() {
 
   const [bundle, setBundle] = useState<AdminBundle | null>(null);
   const [pages, setPages] = useState<PageSummary[] | null>(null);
+  const [okfDocs, setOkfDocs] = useState<OkfDocSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -45,12 +50,14 @@ export default function BundleDetailPage() {
   const suggestedPath = title.trim() && !path.trim() ? pagePathFromTitle(title) : "";
 
   const load = useCallback(async () => {
-    const [bundleRow, pageRows] = await Promise.all([
-      fetchBundle(bundleId),
+    const bundleRow = await fetchBundle(bundleId);
+    const [pageRows, okfDocRows] = await Promise.all([
       fetchBundlePages(bundleId),
+      bundleRow.mode === "llm_compiled" ? fetchOkfDocs(bundleId) : Promise.resolve(null),
     ]);
     setBundle(bundleRow);
     setPages(pageRows);
+    setOkfDocs(okfDocRows);
   }, [bundleId]);
 
   useEffect(() => {
@@ -223,43 +230,51 @@ export default function BundleDetailPage() {
         <h2 className="text-muted-foreground mb-3 text-[0.6875rem] font-medium uppercase tracking-[0.06em]">
           {bundle.mode === "llm_compiled" ? t.bundles.sourceDocuments : t.bundles.documents}
         </h2>
-        {pages.length === 0 ? (
-          <p className="text-muted-foreground text-sm">
-            {bundle.mode === "llm_compiled" ? t.bundles.emptySources : t.bundles.emptyDocuments}
-          </p>
-        ) : (
-          <ul className="flex flex-col gap-2">
-            {pages.map((page) => {
-              const viewHref =
-                bundle.mode === "llm_compiled"
-                  ? `/sources/${bundle.slug}/${page.path}`
-                  : `/wiki/${bundle.slug}/${page.path}`;
-              return (
-                <li
-                  key={page.id}
-                  className="surface-card surface-card-interactive flex items-center justify-between gap-3 rounded-xl p-3.5"
-                >
-                  <Link href={viewHref} className="flex min-w-0 flex-col gap-0.5">
-                    <span className="truncate font-medium" dir="auto">
-                      {page.title}
-                    </span>
-                    <span className="text-muted-foreground truncate font-mono text-xs">
-                      /{page.path}
-                    </span>
-                  </Link>
-                  <Link
-                    href={`/bundles/${bundleId}/pages/${page.id}/edit`}
-                    className="text-muted-foreground hover:bg-muted/60 hover:text-foreground flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors duration-150"
-                  >
-                    <PencilIcon className="size-3.5" />
-                    {t.common.edit}
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+        <DocTree
+          tree={buildTree(pages)}
+          linkFor={(node) =>
+            bundle.mode === "llm_compiled"
+              ? `/sources/${bundle.slug}/${node.path}`
+              : `/wiki/${bundle.slug}/${node.path}`
+          }
+          renderActions={(node) => (
+            <Link
+              href={`/bundles/${bundleId}/pages/${node.page!.id}/edit`}
+              className="text-muted-foreground hover:bg-muted/60 hover:text-foreground flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors duration-150"
+              aria-label={t.common.edit}
+            >
+              <PencilIcon className="size-3.5" />
+            </Link>
+          )}
+          emptyMessage={bundle.mode === "llm_compiled" ? t.bundles.emptySources : t.bundles.emptyDocuments}
+        />
       </div>
+
+      {bundle.mode === "llm_compiled" ? (
+        <div>
+          <h2 className="text-muted-foreground mb-3 text-[0.6875rem] font-medium uppercase tracking-[0.06em]">
+            {t.okfDocs.sectionTitle}
+          </h2>
+          <DocTree
+            tree={buildTree((okfDocs ?? []).map((doc) => ({ id: doc.path, ...doc })))}
+            linkFor={(node) => `/wiki/${bundle.slug}/${node.path}`}
+            renderActions={(node) => {
+              const doc = okfDocs?.find((d) => d.path === node.path);
+              if (!doc || doc.readonly) return null;
+              return (
+                <Link
+                  href={`/bundles/${bundleId}/okf-docs/edit/${node.path}`}
+                  className="text-muted-foreground hover:bg-muted/60 hover:text-foreground flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors duration-150"
+                  aria-label={t.common.edit}
+                >
+                  <PencilIcon className="size-3.5" />
+                </Link>
+              );
+            }}
+            emptyMessage={t.okfDocs.empty}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

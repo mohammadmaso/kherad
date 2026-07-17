@@ -6,32 +6,63 @@ import { createTool } from "@mastra/core/tools";
 import { and, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 
-type Bundle = { id: string; slug: string; title: string; defaultBranch: string; isPublic: boolean };
+import { createEmbedder } from "../../lib/embedder";
+import { createSearchTools } from "../search-tools";
 
 const decoder = new TextDecoder();
 
 /**
- * Interviewer tool surface: read wiki (optional bundle) + session uploads,
- * ask structured questions (HITL via UI), and propose the final markdown draft.
+ * Specialist tool surface: cross-bundle wiki research (every bundle the user
+ * can view, not just an attached one), session uploads, structured
+ * questions (HITL via UI), and the final propose_document handoff.
  */
-export function createInterviewerTools(args: {
+export function createSpecialistTools(args: {
   db: Database;
   git: GitEngine;
   user: AuthedUser;
   sessionId: string;
-  bundle: Bundle | null;
 }) {
-  const { db, git, user, sessionId, bundle } = args;
+  const { db, git, user, sessionId } = args;
 
-  const listSourcePagesTool = createTool({
-    id: "list_source_pages",
+  async function findViewableBundle(slug: string) {
+    const bundle = await db.query.bundles.findFirst({
+      where: and(eq(schema.bundles.slug, slug), isNull(schema.bundles.archivedAt)),
+    });
+    if (!bundle) return null;
+    const allowed = await checkPermission(db, user, bundle, null, "view");
+    return allowed ? bundle : null;
+  }
+
+  const listBundles = createTool({
+    id: "list_bundles",
     description:
-      "List live wiki pages (path + title) in the attached bundle. Use to find what already exists before interviewing.",
+      "List wiki bundles (slug + title) the user can view. Start research here, then drill into a bundle with list_source_pages.",
     inputSchema: z.object({}),
     execute: async () => {
-      if (!bundle) return { error: "No wiki bundle is attached to this session" };
-      const allowed = await checkPermission(db, user, bundle, null, "view");
-      if (!allowed) return { error: "You do not have permission to view this bundle" };
+      const all = await db.query.bundles.findMany({
+        where: isNull(schema.bundles.archivedAt),
+        orderBy: schema.bundles.title,
+      });
+      const visible: Array<{ slug: string; title: string }> = [];
+      for (const bundle of all) {
+        if (await checkPermission(db, user, bundle, null, "view")) {
+          visible.push({ slug: bundle.slug, title: bundle.title });
+        }
+      }
+      return { bundles: visible };
+    },
+  });
+
+  const listSourcePages = createTool({
+    id: "list_source_pages",
+    description:
+      "List live wiki pages (path + title) in one bundle, by its slug from list_bundles.",
+    inputSchema: z.object({
+      bundleSlug: z.string().describe("Bundle slug, exactly as returned by list_bundles"),
+    }),
+    execute: async ({ bundleSlug }) => {
+      const bundle = await findViewableBundle(bundleSlug);
+      if (!bundle) return { error: `No viewable bundle with slug "${bundleSlug}"` };
       const pages = await db.query.pages.findMany({
         where: and(
           eq(schema.pages.bundleId, bundle.id),
@@ -48,29 +79,26 @@ export function createInterviewerTools(args: {
 
   const readSourcePage = createTool({
     id: "read_source_page",
-    description: "Read the markdown content of one wiki page by its path (from list_source_pages).",
+    description:
+      "Read the markdown content of one wiki page by bundle slug and page path (from list_source_pages).",
     inputSchema: z.object({
+      bundleSlug: z.string().describe("Bundle slug, exactly as returned by list_bundles"),
       path: z.string().describe("The wiki page path, exactly as returned by list_source_pages"),
     }),
-    execute: async ({ path }) => {
-      if (!bundle) return { error: "No wiki bundle is attached to this session" };
+    execute: async ({ bundleSlug, path }) => {
+      const bundle = await findViewableBundle(bundleSlug);
+      if (!bundle) return { error: `No viewable bundle with slug "${bundleSlug}"` };
       const allowed = await checkPermission(db, user, bundle, path, "view");
       if (!allowed) return { error: "You do not have permission to view this page" };
-      const bytes = await git.getLatestSourcePageAtRef(
-        bundle.defaultBranch,
-        bundle.slug,
-        path,
-      );
-      if (bytes === null) {
-        return { error: `No page at path "${path}"` };
-      }
+      const bytes = await git.getLatestSourcePageAtRef(bundle.defaultBranch, bundle.slug, path);
+      if (bytes === null) return { error: `No page at path "${path}"` };
       return { content: decoder.decode(bytes) };
     },
   });
 
   const listUploads = createTool({
     id: "list_uploads",
-    description: "List files the manager uploaded to this interview session.",
+    description: "List files the user uploaded to this session.",
     inputSchema: z.object({}),
     execute: async () => {
       const uploads = await db.query.agentUploads.findMany({
@@ -107,10 +135,10 @@ export function createInterviewerTools(args: {
   const askQuestion = createTool({
     id: "ask_question",
     description:
-      "Present a structured question with selectable options (and optional free-text). After calling this, wait for the manager's next message with their answer.",
+      "Present a structured question with selectable options (and optional free-text). After calling this, wait for the user's next message with their answer.",
     inputSchema: z.object({
       id: z.string().describe("Short stable id for this question, e.g. 'audience'"),
-      prompt: z.string().describe("The question shown to the manager"),
+      prompt: z.string().describe("The question shown to the user"),
       options: z
         .array(z.string())
         .min(1)
@@ -119,7 +147,7 @@ export function createInterviewerTools(args: {
       allowCustom: z
         .boolean()
         .default(true)
-        .describe("Whether the manager may type a custom answer"),
+        .describe("Whether the user may type a custom answer"),
     }),
     execute: async ({ id, prompt, options, allowCustom }) => {
       return {
@@ -129,7 +157,7 @@ export function createInterviewerTools(args: {
         options,
         allowCustom,
         instruction:
-          "Stop and wait. The manager will answer in their next message. Do not ask another structured question until they reply.",
+          "Stop and wait. The user will answer in their next message. Do not ask another structured question until they reply.",
       };
     },
   });
@@ -137,7 +165,7 @@ export function createInterviewerTools(args: {
   const proposeDocument = createTool({
     id: "propose_document",
     description:
-      "Propose the final markdown document for the manager to edit and import into the wiki. Call once when the interview has enough substance.",
+      "Propose the final markdown document for the user to edit and import into the wiki. Call once when the session has enough substance.",
     inputSchema: z.object({
       title: z.string().describe("Suggested document title"),
       markdown: z.string().describe("Full markdown body (no outer code fence)"),
@@ -150,7 +178,7 @@ export function createInterviewerTools(args: {
         .set({
           draftMarkdown: trimmed,
           status: "draft_ready",
-          title: title.trim().slice(0, 120) || "Interview draft",
+          title: title.trim().slice(0, 120) || "Session draft",
           updatedAt: new Date(),
         })
         .where(eq(schema.agentSessions.id, sessionId));
@@ -158,12 +186,20 @@ export function createInterviewerTools(args: {
     },
   });
 
+  const searchTools = createSearchTools({
+    db,
+    embedderFactory: () => createEmbedder(db),
+    scope: { kind: "user", user },
+  });
+
   return {
-    list_source_pages: listSourcePagesTool,
+    list_bundles: listBundles,
+    list_source_pages: listSourcePages,
     read_source_page: readSourcePage,
     list_uploads: listUploads,
     read_upload: readUpload,
     ask_question: askQuestion,
     propose_document: proposeDocument,
+    ...searchTools,
   };
 }

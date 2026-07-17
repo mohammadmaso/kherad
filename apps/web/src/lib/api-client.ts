@@ -129,6 +129,36 @@ export function fetchBundlePages(bundleId: string): Promise<PageSummary[]> {
   return request(`${API_URL}/bundles/${bundleId}/pages`);
 }
 
+export type OkfDocSummary = { path: string; title: string; readonly: boolean };
+
+/** Folder-tree listing of a `llm_compiled` bundle's compiled OKF docs. */
+export function fetchOkfDocs(bundleId: string): Promise<OkfDocSummary[]> {
+  return request(`${API_URL}/bundles/${bundleId}/okf-docs`);
+}
+
+export type OkfDocContent = {
+  path: string;
+  content: string;
+  branch: string;
+  canEdit: boolean;
+  lastCommitAt: string | null;
+};
+
+export function fetchOkfDocContent(bundleId: string, path: string): Promise<OkfDocContent> {
+  return request(`${API_URL}/bundles/${bundleId}/okf-docs/content?path=${encodeURIComponent(path)}`);
+}
+
+export function saveOkfDocContent(
+  bundleId: string,
+  path: string,
+  content: string,
+): Promise<{ commitOid: string; branch: string; updatedAt: string }> {
+  return request(
+    `${API_URL}/bundles/${bundleId}/okf-docs/content?path=${encodeURIComponent(path)}`,
+    { method: "PUT", body: JSON.stringify({ content }) },
+  );
+}
+
 export function createPage(
   bundleId: string,
   input: { path: string; title: string; content?: string },
@@ -261,9 +291,19 @@ export type MrComment = {
   author: MrUser;
 };
 
-/** Opens or updates the merge request for the caller's own branch on this bundle. */
-export function submitForReview(bundleId: string): Promise<MergeRequestSummary> {
-  return request(`${API_URL}/bundles/${bundleId}/merge-requests`, { method: "POST" });
+/**
+ * Opens or updates the merge request for the caller's own branch on this
+ * bundle. `scope: "okf"` submits compiled-doc edits (okf-docs.ts)
+ * independently of any in-flight `"wiki"` MR on the same branch.
+ */
+export function submitForReview(
+  bundleId: string,
+  scope: "wiki" | "okf" = "wiki",
+): Promise<MergeRequestSummary> {
+  return request(`${API_URL}/bundles/${bundleId}/merge-requests`, {
+    method: "POST",
+    body: JSON.stringify({ scope }),
+  });
 }
 
 export function fetchMergeRequests(
@@ -288,6 +328,29 @@ export function rejectMergeRequest(bundleId: string, mrId: string): Promise<Merg
   return request(`${API_URL}/bundles/${bundleId}/merge-requests/${mrId}/reject`, {
     method: "POST",
   });
+}
+
+export type Notification = {
+  id: string;
+  type: "mr_submitted";
+  bundleId: string;
+  mrId: string | null;
+  body: string;
+  readAt: string | null;
+  createdAt: string;
+  bundle: { id: string; slug: string; title: string };
+};
+
+export function fetchNotifications(): Promise<Notification[]> {
+  return request(`${API_URL}/notifications`);
+}
+
+export function markNotificationRead(notificationId: string): Promise<Notification> {
+  return request(`${API_URL}/notifications/${notificationId}/read`, { method: "POST" });
+}
+
+export function markAllNotificationsRead(): Promise<{ ok: true }> {
+  return request(`${API_URL}/notifications/read-all`, { method: "POST" });
 }
 
 export function fetchMrComments(bundleId: string, mrId: string): Promise<MrComment[]> {
@@ -540,7 +603,7 @@ export function pullDocumentRemote(): Promise<
   return request(`${API_URL}/admin/document-remote/pull`, { method: "POST" });
 }
 
-// ---- Wiki versions (admin-only) ----
+// ---- Per-bundle wiki versions (bundle managers + admins) ----
 
 export type WikiVersion = {
   name: string;
@@ -555,31 +618,36 @@ export type WikiCommit = {
   committedAt: string;
 };
 
-export function fetchWikiVersions(): Promise<WikiVersion[]> {
-  return request(`${API_URL}/admin/wiki-versions`);
+export function fetchWikiVersions(bundleId: string): Promise<WikiVersion[]> {
+  return request(`${API_URL}/bundles/${bundleId}/versions`);
 }
 
-export function fetchWikiCommits(limit = 50): Promise<WikiCommit[]> {
-  return request(`${API_URL}/admin/wiki-versions/commits?limit=${limit}`);
+export function fetchWikiCommits(bundleId: string, limit = 50): Promise<WikiCommit[]> {
+  return request(`${API_URL}/bundles/${bundleId}/versions/commits?limit=${limit}`);
 }
 
-export function createWikiVersion(name: string, fromOid?: string): Promise<WikiVersion> {
-  return request(`${API_URL}/admin/wiki-versions`, {
+export function createWikiVersion(
+  bundleId: string,
+  name: string,
+  fromOid?: string,
+): Promise<WikiVersion> {
+  return request(`${API_URL}/bundles/${bundleId}/versions`, {
     method: "POST",
     body: JSON.stringify(fromOid ? { name, fromOid } : { name }),
   });
 }
 
 export function restoreWikiVersion(
+  bundleId: string,
   name: string,
 ): Promise<{ restored: boolean; pagesUpserted: number; pagesDeleted: number }> {
-  return request(`${API_URL}/admin/wiki-versions/${encodeURIComponent(name)}/restore`, {
+  return request(`${API_URL}/bundles/${bundleId}/versions/${encodeURIComponent(name)}/restore`, {
     method: "POST",
   });
 }
 
-export function deleteWikiVersion(name: string): Promise<{ deleted: boolean }> {
-  return request(`${API_URL}/admin/wiki-versions/${encodeURIComponent(name)}`, {
+export function deleteWikiVersion(bundleId: string, name: string): Promise<{ deleted: boolean }> {
+  return request(`${API_URL}/bundles/${bundleId}/versions/${encodeURIComponent(name)}`, {
     method: "DELETE",
   });
 }
@@ -858,20 +926,16 @@ export function deleteChatThread(bundleId: string, threadId: string): Promise<{ 
   return request(`${API_URL}/bundles/${bundleId}/chat/threads/${threadId}`, { method: "DELETE" });
 }
 
-// ---- Agents (Interviewer) ----
+// ---- Agents (Specialist) ----
 
-export type AgentCatalogItem = {
-  id: "interviewer";
-  name: string;
-  description: string;
-  href: string;
-};
+export type AgentAggressiveness = "relaxed" | "balanced" | "aggressive";
 
 export type AgentSessionSummary = {
   id: string;
-  agentType: "interviewer";
   title: string;
   goal: string | null;
+  role: string | null;
+  aggressiveness: AgentAggressiveness;
   status: "active" | "draft_ready" | "imported" | "archived";
   bundleId: string | null;
   updatedAt: string;
@@ -882,6 +946,7 @@ export type AgentSession = AgentSessionSummary & {
   draftMarkdown: string | null;
   uploadCount: number;
   bundle: { id: string; slug: string; title: string; mode: string } | null;
+  skills: Array<{ id: string; name: string }>;
 };
 
 export type AgentUpload = {
@@ -900,7 +965,7 @@ export type AgentBundleOption = {
   canEdit: boolean;
 };
 
-export type InterviewerImportResult = {
+export type AgentImportResult = {
   page: PageSummary;
   branch: string;
   compile:
@@ -909,56 +974,58 @@ export type InterviewerImportResult = {
     | { status: "failed"; reason: string };
 };
 
-export function fetchAgentsHub(): Promise<{
-  agents: AgentCatalogItem[];
-  sessions: AgentSessionSummary[];
-}> {
+export function fetchAgentsHub(): Promise<{ sessions: AgentSessionSummary[] }> {
   return request(`${API_URL}/agents`);
 }
 
-export function fetchInterviewerBundles(): Promise<AgentBundleOption[]> {
-  return request(`${API_URL}/agents/interviewer/bundles`);
+export function fetchAgentBundles(): Promise<AgentBundleOption[]> {
+  return request(`${API_URL}/agents/bundles`);
 }
 
-export function createInterviewerSession(input: {
+export function createAgentSession(input: {
   goal?: string;
   bundleId?: string | null;
+  role?: string;
+  aggressiveness?: AgentAggressiveness;
+  skillIds?: string[];
 }): Promise<AgentSession> {
-  return request(`${API_URL}/agents/interviewer/sessions`, {
+  return request(`${API_URL}/agents/sessions`, {
     method: "POST",
     body: JSON.stringify(input),
   });
 }
 
-export function fetchInterviewerSession(sessionId: string): Promise<{
+export function fetchAgentSession(sessionId: string): Promise<{
   session: AgentSession;
   uploads: AgentUpload[];
   messages: { id: string; role: string; parts: unknown[] }[];
 }> {
-  return request(`${API_URL}/agents/interviewer/sessions/${sessionId}`);
+  return request(`${API_URL}/agents/sessions/${sessionId}`);
 }
 
-export function updateInterviewerSession(
+export function updateAgentSession(
   sessionId: string,
   input: {
     goal?: string | null;
     bundleId?: string | null;
     draftMarkdown?: string | null;
     title?: string;
+    role?: string | null;
+    aggressiveness?: AgentAggressiveness;
     status?: AgentSession["status"];
   },
 ): Promise<AgentSession> {
-  return request(`${API_URL}/agents/interviewer/sessions/${sessionId}`, {
+  return request(`${API_URL}/agents/sessions/${sessionId}`, {
     method: "PATCH",
     body: JSON.stringify(input),
   });
 }
 
-export async function uploadInterviewerFile(sessionId: string, file: File): Promise<AgentUpload> {
+export async function uploadAgentFile(sessionId: string, file: File): Promise<AgentUpload> {
   const token = getToken();
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${API_URL}/agents/interviewer/sessions/${sessionId}/uploads`, {
+  const res = await fetch(`${API_URL}/agents/sessions/${sessionId}/uploads`, {
     method: "POST",
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: form,
@@ -970,26 +1037,76 @@ export async function uploadInterviewerFile(sessionId: string, file: File): Prom
   return res.json() as Promise<AgentUpload>;
 }
 
-export function deleteInterviewerUpload(
+export function deleteAgentUpload(
   sessionId: string,
   uploadId: string,
 ): Promise<{ deleted: string }> {
-  return request(`${API_URL}/agents/interviewer/sessions/${sessionId}/uploads/${uploadId}`, {
+  return request(`${API_URL}/agents/sessions/${sessionId}/uploads/${uploadId}`, {
     method: "DELETE",
   });
 }
 
-export function importInterviewerDraft(
+export function importAgentDraft(
   sessionId: string,
   input: { bundleId: string; path?: string; title: string },
-): Promise<InterviewerImportResult> {
-  return request(`${API_URL}/agents/interviewer/sessions/${sessionId}/import`, {
+): Promise<AgentImportResult> {
+  return request(`${API_URL}/agents/sessions/${sessionId}/import`, {
     method: "POST",
     body: JSON.stringify(input),
   });
 }
 
+// ---- Skills ----
+
+export type Skill = {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  roleKeys: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SkillDetail = Skill & { content: string };
+
+export function fetchSkills(): Promise<Skill[]> {
+  return request(`${API_URL}/skills`);
+}
+
+export function fetchSkillDetail(id: string): Promise<SkillDetail> {
+  return request(`${API_URL}/admin/skills/${id}`);
+}
+
+export function createSkill(input: {
+  name: string;
+  description?: string | null;
+  content: string;
+  roleKeys?: string[];
+}): Promise<SkillDetail> {
+  return request(`${API_URL}/admin/skills`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateSkill(
+  id: string,
+  input: { name?: string; description?: string | null; content?: string; roleKeys?: string[] },
+): Promise<SkillDetail> {
+  return request(`${API_URL}/admin/skills/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteSkill(id: string): Promise<{ deleted: string }> {
+  return request(`${API_URL}/admin/skills/${id}`, { method: "DELETE" });
+}
+
 // ---- Search ----
+
+export type SearchMode = "keyword" | "semantic" | "hybrid";
 
 export type SearchResult = {
   pageId: string;
@@ -999,9 +1116,63 @@ export type SearchResult = {
   path: string;
   title: string;
   rank: number;
+  scores?: {
+    keyword: number | null;
+    semantic: number | null;
+    combined: number;
+  };
+  snippet?: string | null;
   source: "raw" | "okf";
 };
 
-export function searchWiki(q: string): Promise<{ results: SearchResult[] }> {
-  return request(`${API_URL}/search?q=${encodeURIComponent(q)}`);
+export type SearchResponse = {
+  results: SearchResult[];
+  mode: SearchMode;
+  semanticAvailable: boolean;
+};
+
+export function searchWiki(q: string, mode?: SearchMode): Promise<SearchResponse> {
+  const params = new URLSearchParams({ q });
+  if (mode) params.set("mode", mode);
+  return request(`${API_URL}/search?${params}`);
+}
+
+// ---- Embedding settings (admin-only) ----
+
+export type EmbeddingReindexStatus = {
+  running: boolean;
+  total: number;
+  done: number;
+  failed: number;
+  finishedAt: string | null;
+};
+
+export type EmbeddingSettings = {
+  baseUrl: string | null;
+  hasApiKey: boolean;
+  model: string;
+  updatedAt: string | null;
+  reindex: EmbeddingReindexStatus;
+  modelChanged?: boolean;
+};
+
+export function fetchEmbeddingSettings(): Promise<EmbeddingSettings> {
+  return request(`${API_URL}/admin/embedding-settings`);
+}
+
+export function saveEmbeddingSettings(input: {
+  baseUrl: string;
+  apiKey?: string;
+  model?: string;
+}): Promise<EmbeddingSettings> {
+  return request(`${API_URL}/admin/embedding-settings`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export function startEmbeddingReindex(): Promise<EmbeddingReindexStatus> {
+  return request(`${API_URL}/admin/embedding-settings/reindex`, {
+    method: "POST",
+  });
 }

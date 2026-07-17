@@ -26,8 +26,8 @@ export { RemotePullError } from "./remote-pull";
 export { DEFAULT_BRANCH } from "./repo";
 export { userBranchName } from "./refs";
 export {
+  bundleVersionBranchName,
   isValidVersionName,
-  versionBranchName,
   WikiVersionError,
   type RestoreVersionResult,
   type WikiCommit,

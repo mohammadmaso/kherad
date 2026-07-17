@@ -285,6 +285,11 @@ export default function AdminBundlesPage() {
                         >
                           {t.admin.bundleRemote}
                         </DropdownMenuItem>
+                        <DropdownMenuItem
+                          render={<Link href={`/admin/bundles/${bundle.id}/versions`} />}
+                        >
+                          {t.admin.versions}
+                        </DropdownMenuItem>
                         <DropdownMenuSeparator />
                         {bundle.archivedAt ? (
                           <DropdownMenuItem

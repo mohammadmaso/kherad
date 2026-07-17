@@ -4,6 +4,7 @@ import { Button } from "@kherad/ui/components/ui/button";
 import { Input } from "@kherad/ui/components/ui/input";
 import { useState } from "react";
 
+import { Response } from "@/components/ai-elements/response";
 import { useI18n } from "@/lib/i18n/provider";
 
 export type AskQuestionPayload = {
@@ -15,6 +16,7 @@ export type AskQuestionPayload = {
 
 /**
  * Structured interview question: pick a chip or write a custom answer.
+ * Prompt is rendered as markdown.
  */
 export function AskQuestionCard({
   question,
@@ -38,7 +40,9 @@ export function AskQuestionCard({
 
   return (
     <div className="border-border bg-muted/30 my-2 rounded-xl border p-3">
-      <p className="text-sm font-medium leading-snug">{question.prompt}</p>
+      <div className="text-sm font-medium leading-snug">
+        <Response>{question.prompt}</Response>
+      </div>
       <div className="mt-3 flex flex-wrap gap-2">
         {question.options.map((option) => {
           const active = !useCustom && selected === option;
@@ -57,7 +61,7 @@ export function AskQuestionCard({
                   : "bg-background border-border hover:bg-muted border"
               }`}
             >
-              {option}
+              <span dir="auto">{option}</span>
             </button>
           );
         })}
