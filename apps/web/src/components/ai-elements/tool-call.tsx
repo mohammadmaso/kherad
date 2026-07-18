@@ -34,7 +34,18 @@ const FRIENDLY_NAMES: Record<string, string> = {
 };
 
 function friendlyToolName(name: string): string {
-  return FRIENDLY_NAMES[name] ?? name.replaceAll("_", " ");
+  if (FRIENDLY_NAMES[name]) return FRIENDLY_NAMES[name];
+  // MCP tools are namespaced as slug_toolName — split on the first underscore
+  // so "linear_list_issues" reads as "linear · list issues".
+  const sep = name.indexOf("_");
+  if (sep > 0 && sep < name.length - 1) {
+    const slug = name.slice(0, sep);
+    const tool = name.slice(sep + 1).replaceAll("_", " ");
+    if (!FRIENDLY_NAMES[name.slice(sep + 1)]) {
+      return `${slug} · ${tool}`;
+    }
+  }
+  return name.replaceAll("_", " ");
 }
 
 function isRunning(state: string | undefined): boolean {
@@ -131,14 +142,14 @@ export function ToolCall({
         </span>
         <ChevronDownIcon
           className={cn(
-            "text-muted-foreground size-3.5 shrink-0 transition-transform duration-200 ease-out",
+            "text-muted-foreground size-3.5 shrink-0 transition-transform duration-200 ease-out motion-reduce:transition-none",
             open ? "rotate-180" : "rotate-0",
           )}
         />
       </button>
 
       {open ? (
-        <div className="border-border space-y-2 border-t px-2.5 py-2">
+        <div className="border-border animate-in fade-in-0 slide-in-from-top-1 space-y-2 border-t px-2.5 py-2 duration-150 motion-reduce:animate-none">
           {markdownBlocks.map((block) => (
             <div key={block.label} className="space-y-1">
               <p className="text-muted-foreground text-[0.65rem] font-medium tracking-wide uppercase">

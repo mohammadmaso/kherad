@@ -3,7 +3,7 @@
 import { Alert, AlertDescription, AlertTitle } from "@kherad/ui/components/ui/alert";
 import { Badge } from "@kherad/ui/components/ui/badge";
 import { Button } from "@kherad/ui/components/ui/button";
-import { BriefcaseIcon } from "lucide-react";
+import { BriefcaseIcon, PlusIcon } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -25,6 +25,34 @@ function statusLabel(
     default:
       return t.agents.statusActive;
   }
+}
+
+function statusVariant(
+  status: AgentSessionSummary["status"],
+): "secondary" | "success" | "outline" | "warning" {
+  switch (status) {
+    case "draft_ready":
+      return "success";
+    case "imported":
+      return "outline";
+    case "archived":
+      return "secondary";
+    default:
+      return "secondary";
+  }
+}
+
+function relativeTime(
+  iso: string,
+  t: ReturnType<typeof useI18n>["t"],
+): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return t.agents.relativeJustNow;
+  if (minutes < 60) return t.agents.relativeMinutes(minutes);
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return t.agents.relativeHours(hours);
+  return t.agents.relativeDays(Math.floor(hours / 24));
 }
 
 export default function AgentsPage() {
@@ -85,9 +113,21 @@ export default function AgentsPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-8 p-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{t.agents.title}</h1>
-        <p className="text-muted-foreground mt-1.5 text-sm">{t.agents.subtitle}</p>
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">{t.agents.title}</h1>
+          <p className="text-muted-foreground mt-1.5 max-w-xl text-sm leading-relaxed">
+            {t.agents.subtitle}
+          </p>
+        </div>
+        <Button
+          nativeButton={false}
+          render={<Link href="/agents/new" />}
+          className="shrink-0"
+        >
+          <PlusIcon className="size-4" />
+          {t.agents.newSpecialist}
+        </Button>
       </div>
 
       {error ? (
@@ -97,42 +137,63 @@ export default function AgentsPage() {
         </Alert>
       ) : null}
 
-      <section className="border-border bg-card flex flex-col gap-3 rounded-2xl border p-5 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <span className="bg-primary/12 text-primary flex size-9 items-center justify-center rounded-xl">
-            <BriefcaseIcon className="size-4" />
-          </span>
-          <div>
-            <h2 className="text-base font-semibold">{t.agents.specialist}</h2>
-            <p className="text-muted-foreground text-sm leading-relaxed">{t.agents.specialistDesc}</p>
-          </div>
-        </div>
-        <Button nativeButton={false} render={<Link href="/agents/new" />} className="shrink-0">
-          {t.agents.newSpecialist}
-        </Button>
-      </section>
-
       <section className="flex flex-col gap-3">
-        <h2 className="text-sm font-semibold tracking-wide uppercase opacity-80">
+        <h2 className="text-muted-foreground text-xs font-semibold tracking-[0.06em] uppercase">
           {t.agents.recentSessions}
         </h2>
+
         {sessions.length === 0 ? (
-          <p className="text-muted-foreground text-sm">{t.agents.noSessions}</p>
+          <div className="border-border bg-muted/20 flex flex-col items-center gap-4 rounded-2xl border border-dashed px-6 py-14 text-center">
+            <span className="bg-primary/10 text-primary flex size-12 items-center justify-center rounded-2xl transition-transform duration-200 ease-out">
+              <BriefcaseIcon className="size-5" />
+            </span>
+            <div className="max-w-sm">
+              <p className="text-base font-semibold tracking-tight">
+                {t.agents.emptySessionsTitle}
+              </p>
+              <p className="text-muted-foreground mt-1.5 text-sm leading-relaxed">
+                {t.agents.emptySessionsDesc}
+              </p>
+            </div>
+            <Button nativeButton={false} render={<Link href="/agents/new" />}>
+              {t.agents.newSpecialist}
+            </Button>
+          </div>
         ) : (
-          <ul className="border-border divide-border divide-y overflow-hidden rounded-xl border">
+          <ul className="grid gap-3 sm:grid-cols-2">
             {sessions.map((session) => (
               <li key={session.id}>
                 <Link
                   href={`/agents/${session.id}`}
-                  className="hover:bg-muted/40 flex items-center justify-between gap-3 px-4 py-3 transition-colors duration-150"
+                  className="border-border bg-card hover:bg-muted/30 group flex h-full flex-col gap-3 rounded-2xl border p-4 transition-[background-color,transform,box-shadow] duration-150 ease-out active:scale-[0.99] motion-reduce:transition-colors motion-reduce:active:scale-100"
                 >
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">{session.title}</p>
-                    <p className="text-muted-foreground truncate text-xs">
-                      {session.role || session.goal || t.agents.specialist}
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="line-clamp-2 text-sm font-semibold tracking-tight group-hover:text-foreground">
+                      {session.title}
                     </p>
+                    <Badge variant={statusVariant(session.status)} className="shrink-0">
+                      {statusLabel(session.status, t)}
+                    </Badge>
                   </div>
-                  <Badge variant="secondary">{statusLabel(session.status, t)}</Badge>
+                  {session.goal ? (
+                    <p className="text-muted-foreground line-clamp-2 text-xs leading-relaxed">
+                      {session.goal}
+                    </p>
+                  ) : null}
+                  <div className="text-muted-foreground mt-auto flex flex-wrap items-center gap-2 text-xs">
+                    {session.role ? (
+                      <span className="bg-muted/60 rounded-md px-1.5 py-0.5 font-medium">
+                        {session.role}
+                      </span>
+                    ) : (
+                      <span className="bg-muted/60 rounded-md px-1.5 py-0.5">
+                        {t.agents.specialist}
+                      </span>
+                    )}
+                    <span className="ms-auto tabular-nums">
+                      {relativeTime(session.updatedAt, t)}
+                    </span>
+                  </div>
                 </Link>
               </li>
             ))}

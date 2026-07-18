@@ -14,10 +14,13 @@ export type PageSection = {
 };
 
 export type SectionSplitResult = {
-  /** Content before the first top-level heading, or the whole doc when there are none. */
+  /** Content before the first document heading, or the whole doc when there are none. */
   preamble: string | null;
   sections: PageSection[];
-  /** Min depth among top-level heading children; null when the doc has no headings. */
+  /**
+   * Shallowest heading depth present (for status/debug). Null when the doc has
+   * no headings. Sections themselves are split on every heading depth.
+   */
   topLevel: number | null;
 };
 
@@ -46,7 +49,11 @@ function normalizeTrailingNewline(chunk: string): string {
 }
 
 /**
- * Split markdown into a preamble + top-level heading sections.
+ * Split markdown into a preamble + one section per document heading.
+ *
+ * Every heading depth (h1–h6) starts its own section, ending at the next
+ * heading of any depth. That lets the agent read/edit low-level headings
+ * (h3+) instead of pulling an entire h1/h2 chunk.
  *
  * Only walks `tree.children` (true mdast top-level nodes). Headings nested
  * inside blockquotes/lists/table cells, and `#` characters inside fenced
@@ -60,7 +67,7 @@ export function splitIntoSections(markdown: string): SectionSplitResult {
   const tree = unified().use(remarkParse).use(remarkGfm).parse(markdown) as MdastNode;
   const children = tree.children ?? [];
 
-  const topLevelHeadings: Array<{
+  const documentHeadings: Array<{
     node: MdastNode;
     depth: number;
     startOffset: number;
@@ -71,7 +78,7 @@ export function splitIntoSections(markdown: string): SectionSplitResult {
     if (child.type !== "heading" || typeof child.depth !== "number") continue;
     const startOffset = child.position?.start?.offset;
     if (typeof startOffset !== "number") continue;
-    topLevelHeadings.push({
+    documentHeadings.push({
       node: child,
       depth: child.depth,
       startOffset,
@@ -79,7 +86,7 @@ export function splitIntoSections(markdown: string): SectionSplitResult {
     });
   }
 
-  if (topLevelHeadings.length === 0) {
+  if (documentHeadings.length === 0) {
     return {
       preamble: markdown.length > 0 ? markdown : null,
       sections: [],
@@ -87,16 +94,15 @@ export function splitIntoSections(markdown: string): SectionSplitResult {
     };
   }
 
-  const topLevel = Math.min(...topLevelHeadings.map((h) => h.depth));
-  const sectionHeadings = topLevelHeadings.filter((h) => h.depth === topLevel);
+  const topLevel = Math.min(...documentHeadings.map((h) => h.depth));
 
-  const preambleEnd = sectionHeadings[0]!.startOffset;
+  const preambleEnd = documentHeadings[0]!.startOffset;
   const preambleRaw = markdown.slice(0, preambleEnd);
   const preamble = preambleRaw.length > 0 ? preambleRaw : null;
 
   const idCounts = new Map<string, number>();
-  const sections: PageSection[] = sectionHeadings.map((heading, orderIndex) => {
-    const next = sectionHeadings[orderIndex + 1];
+  const sections: PageSection[] = documentHeadings.map((heading, orderIndex) => {
+    const next = documentHeadings[orderIndex + 1];
     const endOffset = next ? next.startOffset : markdown.length;
     const slice = markdown.slice(heading.startOffset, endOffset);
 

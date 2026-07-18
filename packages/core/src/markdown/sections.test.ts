@@ -8,7 +8,7 @@ function normalizeWs(md: string): string {
 }
 
 describe("splitIntoSections", () => {
-  it("splits on the shallowest top-level heading depth present", () => {
+  it("splits on every heading depth, not only the shallowest", () => {
     const md = [
       "Intro paragraph.",
       "",
@@ -29,13 +29,44 @@ describe("splitIntoSections", () => {
     const result = splitIntoSections(md);
     expect(result.topLevel).toBe(2);
     expect(result.preamble).toContain("Intro paragraph.");
-    expect(result.sections).toHaveLength(2);
+    expect(result.sections).toHaveLength(3);
     expect(result.sections[0]!.id).toBe("first");
-    expect(result.sections[0]!.headingText).toBe("First");
-    expect(result.sections[0]!.markdown).toContain("### Nested");
-    expect(result.sections[0]!.markdown).toContain("Nested body.");
-    expect(result.sections[1]!.id).toBe("second");
-    expect(result.sections[1]!.markdown).toContain("Body two.");
+    expect(result.sections[0]!.headingLevel).toBe(2);
+    expect(result.sections[0]!.markdown).toContain("Body one.");
+    expect(result.sections[0]!.markdown).not.toContain("### Nested");
+    expect(result.sections[1]!.id).toBe("nested");
+    expect(result.sections[1]!.headingLevel).toBe(3);
+    expect(result.sections[1]!.markdown).toContain("Nested body.");
+    expect(result.sections[2]!.id).toBe("second");
+    expect(result.sections[2]!.headingLevel).toBe(2);
+    expect(result.sections[2]!.markdown).toContain("Body two.");
+  });
+
+  it("keeps h1 title and h3 subsections as separate readable sections", () => {
+    const md = [
+      "# Page title",
+      "",
+      "Lead.",
+      "",
+      "## Chapter",
+      "",
+      "Chapter body.",
+      "",
+      "### Detail",
+      "",
+      "Detail body.",
+      "",
+    ].join("\n");
+
+    const result = splitIntoSections(md);
+    expect(result.sections.map((s) => [s.id, s.headingLevel])).toEqual([
+      ["page-title", 1],
+      ["chapter", 2],
+      ["detail", 3],
+    ]);
+    expect(result.sections[0]!.markdown).toContain("Lead.");
+    expect(result.sections[0]!.markdown).not.toContain("## Chapter");
+    expect(result.sections[2]!.markdown).toContain("Detail body.");
   });
 
   it("does not split on headings inside fenced or mermaid blocks", () => {
@@ -118,6 +149,7 @@ describe("splitIntoSections", () => {
     ].join("\n");
 
     const split = splitIntoSections(md);
+    expect(split.sections).toHaveLength(3);
     const reassembled = assembleDocument(split, new Map());
     expect(normalizeWs(reassembled)).toBe(normalizeWs(md));
   });

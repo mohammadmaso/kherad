@@ -2,9 +2,18 @@
 
 import { Button } from "@kherad/ui/components/ui/button";
 import { cn } from "@kherad/ui/lib/utils";
-import { ArrowUpIcon, AtSignIcon, FileTextIcon, SquareIcon, XIcon } from "lucide-react";
 import {
+  ArrowUpIcon,
+  AtSignIcon,
+  FileTextIcon,
+  MessageSquareQuoteIcon,
+  SquareIcon,
+  XIcon,
+} from "lucide-react";
+import {
+  forwardRef,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
@@ -13,6 +22,11 @@ import {
 } from "react";
 
 import { MAX_MENTIONS_PER_MESSAGE, type MentionPage } from "@/components/chat/page-mentions";
+import { MAX_QUOTES_PER_MESSAGE, type TextQuote } from "@/components/chat/text-quotes";
+
+export type PromptInputHandle = {
+  focus: () => void;
+};
 
 const MAX_SUGGESTIONS = 8;
 // A trailing "@token" at the caret opens the page picker, mirroring the
@@ -36,7 +50,12 @@ type PromptInputProps = {
   /** Wiki pages offered by the "@" picker; omit to disable mentions. */
   mentionPages?: MentionPage[];
   mentionLabels?: MentionLabels;
-  onSubmit: (text: string, mentions: MentionPage[]) => void;
+  /** Preview excerpts attached from the page viewer (controlled). */
+  quotes?: TextQuote[];
+  onQuotesChange?: (quotes: TextQuote[]) => void;
+  /** Message text used when the user sends with quotes but no typed text. */
+  quotesOnlyFallback?: string;
+  onSubmit: (text: string, mentions: MentionPage[], quotes: TextQuote[]) => void;
   onStop: () => void;
 };
 
@@ -45,18 +64,24 @@ type PromptInputProps = {
  * send for stop. When `mentionPages` is provided, an @-button and typing "@"
  * open a page picker; chosen pages attach to the message as chips.
  */
-export function PromptInput({
-  placeholder,
-  submitLabel,
-  stopLabel,
-  status,
-  disabled,
-  className,
-  mentionPages,
-  mentionLabels,
-  onSubmit,
-  onStop,
-}: PromptInputProps) {
+export const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function PromptInput(
+  {
+    placeholder,
+    submitLabel,
+    stopLabel,
+    status,
+    disabled,
+    className,
+    mentionPages,
+    mentionLabels,
+    quotes = [],
+    onQuotesChange,
+    quotesOnlyFallback = "Please look at the excerpts I selected from the page.",
+    onSubmit,
+    onStop,
+  },
+  ref,
+) {
   const [text, setText] = useState("");
   const [mentions, setMentions] = useState<MentionPage[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -71,6 +96,10 @@ export function PromptInput({
 
   const busy = status === "submitted" || status === "streaming";
   const mentionsEnabled = mentionPages !== undefined;
+
+  useImperativeHandle(ref, () => ({
+    focus: () => textareaRef.current?.focus(),
+  }));
 
   const suggestions = useMemo(() => {
     if (!mentionPages) return [];
@@ -130,12 +159,18 @@ export function PromptInput({
     );
   }
 
+  function removeQuote(quote: TextQuote) {
+    onQuotesChange?.(quotes.filter((q) => q.id !== quote.id));
+  }
+
   function submit() {
     const trimmed = text.trim();
-    if (!trimmed || busy || disabled) return;
-    onSubmit(trimmed, mentions);
+    // Allow send with only quotes (user highlighted text and hit send).
+    if ((!trimmed && quotes.length === 0) || busy || disabled) return;
+    onSubmit(trimmed || quotesOnlyFallback, mentions, quotes);
     setText("");
     setMentions([]);
+    onQuotesChange?.([]);
     closeMenu();
   }
 
@@ -200,7 +235,7 @@ export function PromptInput({
       ref={formRef}
       onSubmit={handleSubmit}
       className={cn(
-        "border-border bg-background focus-within:border-ring relative flex flex-col rounded-xl border p-2 transition-colors duration-150",
+        "border-border bg-background focus-within:border-ring relative flex min-w-0 max-w-full flex-col overflow-hidden rounded-xl border p-2 transition-colors duration-150",
         className,
       )}
     >
@@ -250,25 +285,50 @@ export function PromptInput({
         </div>
       ) : null}
 
-      {mentions.length > 0 ? (
-        <div className="flex flex-wrap gap-1.5 px-1 pb-2">
-          {mentions.map((mention) => (
+      {mentions.length > 0 || quotes.length > 0 ? (
+        <div className="flex min-w-0 flex-col gap-1.5 px-1 pb-2">
+          {quotes.map((quote) => (
             <span
-              key={`${mention.bundleSlug}:${mention.path}`}
-              className="bg-muted inline-flex max-w-56 items-center gap-1 rounded-full px-2 py-0.5 text-xs"
+              key={quote.id}
+              className="bg-primary/8 border-primary/20 text-foreground/90 flex w-full min-w-0 max-w-full items-center gap-1.5 rounded-lg border px-2 py-1 text-xs"
+              title={quote.text}
             >
-              <FileTextIcon className="size-3 shrink-0" />
-              <span className="truncate">{mention.title}</span>
+              <MessageSquareQuoteIcon className="size-3 shrink-0" />
+              <span className="min-w-0 flex-1 truncate" dir="auto">
+                {quote.sectionHeading ? `${quote.sectionHeading}: ` : ""}
+                {quote.text}
+              </span>
               <button
                 type="button"
-                aria-label={`${mention.title} ×`}
-                className="text-muted-foreground hover:text-foreground transition-colors duration-100"
-                onClick={() => removeMention(mention)}
+                aria-label="Remove quote"
+                className="text-muted-foreground hover:text-foreground shrink-0 transition-colors duration-100"
+                onClick={() => removeQuote(quote)}
               >
                 <XIcon className="size-3" />
               </button>
             </span>
           ))}
+          {mentions.length > 0 ? (
+            <div className="flex min-w-0 flex-wrap gap-1.5">
+              {mentions.map((mention) => (
+                <span
+                  key={`${mention.bundleSlug}:${mention.path}`}
+                  className="bg-muted inline-flex max-w-full min-w-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs"
+                >
+                  <FileTextIcon className="size-3 shrink-0" />
+                  <span className="min-w-0 truncate">{mention.title}</span>
+                  <button
+                    type="button"
+                    aria-label={`${mention.title} ×`}
+                    className="text-muted-foreground hover:text-foreground shrink-0 transition-colors duration-100"
+                    onClick={() => removeMention(mention)}
+                  >
+                    <XIcon className="size-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -315,7 +375,7 @@ export function PromptInput({
             type="submit"
             size="icon-sm"
             aria-label={submitLabel}
-            disabled={disabled || !text.trim()}
+            disabled={disabled || (!text.trim() && quotes.length === 0)}
           >
             <ArrowUpIcon className="size-4" />
           </Button>
@@ -323,4 +383,6 @@ export function PromptInput({
       </div>
     </form>
   );
-}
+});
+
+export { MAX_QUOTES_PER_MESSAGE };

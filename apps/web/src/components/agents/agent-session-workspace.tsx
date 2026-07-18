@@ -18,15 +18,14 @@ import { DefaultChatTransport, type UIMessage } from "ai";
 import {
   ArrowLeft,
   BriefcaseIcon,
-  FileTextIcon,
   PaperclipIcon,
   SparklesIcon,
   Trash2Icon,
   UploadIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState, useEffectEvent } from "react";
 
 import { AskQuestionCard, extractAskQuestions } from "@/components/agents/ask-question-card";
 import { PageEditViewerPanel } from "@/components/agents/page-edit-viewer-panel";
@@ -45,12 +44,18 @@ import {
   hasVisibleAssistantContent,
   MessageParts,
 } from "@/components/ai-elements/message-parts";
-import { PromptInput } from "@/components/ai-elements/prompt-input";
+import { PromptInput, type PromptInputHandle } from "@/components/ai-elements/prompt-input";
 import {
   buildMentionMessageParts,
   MessageMentionChips,
   type MentionPage,
 } from "@/components/chat/page-mentions";
+import { MessageQuoteChips } from "@/components/chat/message-quote-chips";
+import {
+  MAX_QUOTES_PER_MESSAGE,
+  withTextQuoteParts,
+  type TextQuote,
+} from "@/components/chat/text-quotes";
 import {
   API_URL,
   deleteAgentUpload,
@@ -59,6 +64,7 @@ import {
   fetchBundlePages,
   getToken,
   importAgentDraft,
+  startMcpOauth,
   updateAgentSession,
   uploadAgentFile,
   type AgentBundleOption,
@@ -77,14 +83,19 @@ const MAX_MENTION_BUNDLES = 20;
 export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
   const { t } = useI18n();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const promptRef = useRef<PromptInputHandle>(null);
 
   const [session, setSession] = useState<AgentSession | null>(null);
   const [uploads, setUploads] = useState<AgentUpload[]>([]);
   const [sections, setSections] = useState<AgentPageSection[]>([]);
+  const [effectiveMarkdown, setEffectiveMarkdown] = useState("");
   const [draft, setDraft] = useState("");
+  const [draftEditorKey, setDraftEditorKey] = useState(0);
   const [bundles, setBundles] = useState<AgentBundleOption[]>([]);
   const [mentionPages, setMentionPages] = useState<MentionPage[]>([]);
+  const [quotes, setQuotes] = useState<TextQuote[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [draftSaving, setDraftSaving] = useState(false);
@@ -101,8 +112,17 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
   } | null>(null);
   const [answeredToolKeys, setAnsweredToolKeys] = useState<Set<string>>(new Set());
   const [decidedEditKeys, setDecidedEditKeys] = useState<Set<string>>(new Set());
+  const [connectingMcpId, setConnectingMcpId] = useState<string | null>(null);
+  const refreshedProposalTokenRef = useRef<string | null>(null);
 
   const isEditMode = session?.mode === "edit";
+  const mcpNeedsAuth = (session?.mcpServers ?? []).filter(
+    (s) => s.authType === "oauth2_auth_code" && s.status === "needs_auth",
+  );
+  const oauthConnected = searchParams.get("connected");
+  const oauthErrorParam = searchParams.get("oauthError");
+  const mcpBanner = oauthConnected ? t.agents.mcpConnectedBanner : null;
+  const oauthCallbackError = oauthErrorParam ? t.agents.mcpOauthErrorBanner : null;
 
   const labels = {
     chatTitle: isEditMode ? t.agents.editChatTitle : t.agents.specialistChatTitle,
@@ -119,10 +139,25 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
     setSession(data.session);
     setUploads(data.uploads);
     setSections(data.session.sections ?? []);
+    setEffectiveMarkdown(data.session.effectiveMarkdown ?? "");
     setDraft(data.session.draftMarkdown ?? "");
     if (data.session.bundleId) setImportBundleId(data.session.bundleId);
     return data;
   }, [sessionId]);
+
+  useEffect(() => {
+    if (!oauthConnected && !oauthErrorParam) return;
+    const reloadTimer = window.setTimeout(() => {
+      void reloadSession().catch(() => undefined);
+    }, 0);
+    const clearTimer = window.setTimeout(() => {
+      router.replace(`/agents/${sessionId}`);
+    }, 2500);
+    return () => {
+      window.clearTimeout(reloadTimer);
+      window.clearTimeout(clearTimer);
+    };
+  }, [oauthConnected, oauthErrorParam, sessionId, router, reloadSession]);
 
   const transport = useMemo(
     () =>
@@ -240,6 +275,7 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
     const nextTitle = title;
     queueMicrotask(() => {
       setDraft(nextMarkdown);
+      setDraftEditorKey((k) => k + 1);
       setDraftSaved(false);
       setSession((prev) =>
         prev
@@ -254,17 +290,22 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
     });
   }, [messages, status, isEditMode]);
 
-  // After propose_section_edit finishes, refresh the viewer from the server.
+  const refreshViewerForProposals = useEffectEvent((token: string) => {
+    if (refreshedProposalTokenRef.current === token) return;
+    refreshedProposalTokenRef.current = token;
+    void reloadSession();
+  });
+
+  // After propose_section_edit finishes, refresh the viewer once per proposal set.
   useEffect(() => {
     if (status !== "ready" || !isEditMode) return;
     const last = messages[messages.length - 1];
     if (!last || last.role !== "assistant") return;
     const proposals = extractSectionEditProposals(last.parts as unknown[]);
     if (proposals.length === 0) return;
-    queueMicrotask(() => {
-      void reloadSession();
-    });
-  }, [messages, status, isEditMode, reloadSession]);
+    const token = `${last.id}:${proposals.map((p) => p.editId).sort().join(",")}`;
+    refreshViewerForProposals(token);
+  }, [messages, status, isEditMode]);
 
   const busy = status === "submitted" || status === "streaming";
 
@@ -362,35 +403,48 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
 
   return (
     <div className="mx-auto flex h-[calc(100dvh-3.5rem)] w-full max-w-6xl flex-col gap-3 p-4 sm:p-6">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <Link
             href="/agents"
-            className="text-muted-foreground hover:text-foreground mb-1 inline-flex items-center gap-1.5 text-sm transition-colors"
+            className="text-muted-foreground hover:text-foreground mb-1.5 inline-flex items-center gap-1.5 text-sm transition-colors duration-150 active:scale-[0.98]"
           >
             <ArrowLeft className="size-3.5" />
             {t.agents.title}
           </Link>
-          <h1 className="truncate text-lg font-semibold tracking-tight">{session.title}</h1>
-          {session.role ? (
-            <p className="text-muted-foreground flex items-center gap-1 text-xs">
-              <BriefcaseIcon className="size-3" />
-              {session.role}
-            </p>
-          ) : null}
-          {session.bundle ? (
-            <p className="text-muted-foreground text-xs">
-              {t.agents.attachBundle}: {session.bundle.title}
-            </p>
-          ) : null}
-          <p className="text-muted-foreground text-xs">
-            {t.agents.aggressivenessOptions[session.aggressiveness]}
-            {session.skills.length > 0
-              ? ` · ${session.skills.map((s) => s.name).join(", ")}`
-              : ""}
-          </p>
+          <h1 className="truncate text-xl font-semibold tracking-tight">{session.title}</h1>
+          <div className="text-muted-foreground mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+            {session.role ? (
+              <span className="bg-muted/60 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-medium">
+                <BriefcaseIcon className="size-3" />
+                {session.role}
+              </span>
+            ) : null}
+            {session.bundle ? (
+              <span>
+                {t.agents.attachBundle}: {session.bundle.title}
+              </span>
+            ) : null}
+            <span>{t.agents.aggressivenessOptions[session.aggressiveness]}</span>
+            {session.skills.length > 0 ? (
+              <span className="truncate">{session.skills.map((s) => s.name).join(" · ")}</span>
+            ) : null}
+            {session.mcpServers?.length > 0 ? (
+              <span className="truncate">
+                {session.mcpServers.map((s) => s.name).join(" · ")}
+              </span>
+            ) : null}
+          </div>
         </div>
-        <Badge variant="secondary">
+        <Badge
+          variant={
+            session.status === "draft_ready"
+              ? "success"
+              : session.status === "imported"
+                ? "outline"
+                : "secondary"
+          }
+        >
           {session.status === "draft_ready"
             ? t.agents.statusDraftReady
             : session.status === "imported"
@@ -399,10 +453,62 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
         </Badge>
       </div>
 
-      {error ? (
+      {mcpBanner ? (
+        <Alert>
+          <AlertTitle>{t.common.saved}</AlertTitle>
+          <AlertDescription>{mcpBanner}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      {error || oauthCallbackError ? (
         <Alert variant="destructive">
           <AlertTitle>{t.common.error}</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription>{error ?? oauthCallbackError}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      {mcpNeedsAuth.length > 0 ? (
+        <Alert>
+          <AlertTitle>{t.agents.mcpNeedsAuthWorkspace}</AlertTitle>
+          <AlertDescription className="flex flex-col gap-2">
+            <span>{t.agents.mcpNeedsAuthHint}</span>
+            <div className="flex flex-wrap gap-2">
+              {mcpNeedsAuth.map((server) => (
+                <Button
+                  key={server.id}
+                  size="sm"
+                  variant="outline"
+                  disabled={connectingMcpId === server.id}
+                  onClick={() => {
+                    setConnectingMcpId(server.id);
+                    void (async () => {
+                      try {
+                        const result = await startMcpOauth(
+                          server.id,
+                          `/agents/${sessionId}`,
+                        );
+                        if (result.alreadyAuthorized || !result.authorizationUrl) {
+                          await reloadSession();
+                          setConnectingMcpId(null);
+                          return;
+                        }
+                        window.location.assign(result.authorizationUrl);
+                      } catch (err) {
+                        setError(
+                          err instanceof Error ? err.message : t.agents.mcpOauthErrorBanner,
+                        );
+                        setConnectingMcpId(null);
+                      }
+                    })();
+                  }}
+                >
+                  {connectingMcpId === server.id
+                    ? t.common.loading
+                    : `${t.agents.mcpConnect}: ${server.name}`}
+                </Button>
+              ))}
+            </div>
+          </AlertDescription>
         </Alert>
       ) : null}
 
@@ -501,7 +607,10 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
                   >
                     <MessageContent from={message.role === "user" ? "user" : "assistant"}>
                       {message.role === "user" ? (
-                        <MessageMentionChips parts={message.parts} />
+                        <>
+                          <MessageQuoteChips parts={message.parts as unknown[]} />
+                          <MessageMentionChips parts={message.parts} />
+                        </>
                       ) : null}
                       {message.role === "assistant" ? (
                         <MessageParts
@@ -558,7 +667,17 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
                                   setDecidedEditKeys((prev) => new Set(prev).add(key));
                                   setSections((prev) =>
                                     prev.map((s) =>
-                                      s.editId === proposal.editId ? { ...s, status: next } : s,
+                                      s.id === proposal.sectionId ||
+                                      s.editId === proposal.editId
+                                        ? {
+                                            ...s,
+                                            status: next,
+                                            editId: proposal.editId,
+                                            ...(next === "accepted" && proposal.proposedHtml
+                                              ? { html: proposal.proposedHtml }
+                                              : {}),
+                                          }
+                                        : s,
                                     ),
                                   );
                                   void reloadSession();
@@ -571,23 +690,28 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
                   </Message>
                 );
               })}
-              {(() => {
-                const last = messages[messages.length - 1];
-                const lastAssistant = last?.role === "assistant" ? last : null;
-                const showThinking =
-                  status === "submitted" ||
-                  (status === "streaming" &&
-                    (!lastAssistant || !hasVisibleAssistantContent(lastAssistant.parts)));
-                return showThinking ? <Loader label={labels.thinking} /> : null;
-              })()}
+              {/* Fixed-height slot so the loader appearing/disappearing doesn't
+                  nudge StickToBottom and cause an end-of-scroll bounce. */}
+              <div className="flex min-h-7 items-center" aria-live="polite">
+                {(() => {
+                  const last = messages[messages.length - 1];
+                  const lastAssistant = last?.role === "assistant" ? last : null;
+                  const showThinking =
+                    status === "submitted" ||
+                    (status === "streaming" &&
+                      (!lastAssistant || !hasVisibleAssistantContent(lastAssistant.parts)));
+                  return showThinking ? <Loader label={labels.thinking} /> : null;
+                })()}
+              </div>
               {chatError ? <p className="text-destructive text-xs">{t.chat.error}</p> : null}
             </ConversationContent>
             <ConversationScrollButton label={t.chat.scrollToBottom} />
           </Conversation>
 
-          <div className="border-border border-t p-3">
+          <div className="border-border min-w-0 border-t p-3">
             <p className="text-muted-foreground mb-1.5 text-[0.6875rem]">{t.agents.uploadHint}</p>
             <PromptInput
+              ref={promptRef}
               placeholder={labels.chatPlaceholder}
               submitLabel={t.chat.send}
               stopLabel={t.chat.stop}
@@ -598,10 +722,16 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
                 searchPlaceholder: t.chat.mentionSearch,
                 empty: t.chat.mentionEmpty,
               }}
-              onSubmit={(text, mentions) =>
+              quotes={quotes}
+              onQuotesChange={setQuotes}
+              quotesOnlyFallback={t.agents.quoteOnlyFallback}
+              onSubmit={(text, mentions, nextQuotes) =>
                 void sendMessage({
                   role: "user",
-                  parts: buildMentionMessageParts(text, mentions),
+                  parts: withTextQuoteParts(
+                    buildMentionMessageParts(text, mentions),
+                    nextQuotes,
+                  ),
                 })
               }
               onStop={() => void stop()}
@@ -609,50 +739,46 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
           </div>
         </div>
 
-        {/* Draft / page viewer column */}
+        {/* Document column — same Preview/Edit chrome for create and edit sessions */}
         {isEditMode ? (
           <PageEditViewerPanel
             sessionId={sessionId}
             bundleId={session.bundleId}
+            title={session.title}
             sections={sections}
+            effectiveMarkdown={effectiveMarkdown}
             onSaved={() => void reloadSession()}
+            onAddQuote={(quote) => {
+              setQuotes((prev) => {
+                if (prev.some((q) => q.text === quote.text)) return prev;
+                return [...prev, quote].slice(-MAX_QUOTES_PER_MESSAGE);
+              });
+              requestAnimationFrame(() => promptRef.current?.focus());
+            }}
           />
         ) : (
-          <div className="border-border flex min-h-0 flex-col overflow-hidden rounded-2xl border">
-            <div className="border-border flex items-center justify-between gap-2 border-b px-3 py-2.5">
-              <span className="flex items-center gap-2 text-sm font-semibold">
-                <FileTextIcon className="size-4" />
-                {t.agents.draftTitle}
-              </span>
-              <div className="flex items-center gap-1.5">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={draftSaving || !draft.trim()}
-                  onClick={() => void handleSaveDraft()}
-                >
-                  {draftSaving ? t.common.saving : t.agents.draftSave}
-                </Button>
-                <Button size="sm" disabled={!draft.trim()} onClick={openImport}>
-                  {t.agents.importButton}
-                </Button>
-              </div>
-            </div>
-            {draftSaved ? (
-              <p className="text-muted-foreground border-border border-b px-3 py-1.5 text-xs">
-                {t.agents.draftSaved}
-              </p>
-            ) : null}
-            <textarea
-              value={draft}
-              onChange={(e) => {
-                setDraft(e.target.value);
-                setDraftSaved(false);
-              }}
-              placeholder={t.agents.draftEmpty}
-              className="placeholder:text-muted-foreground min-h-0 flex-1 resize-none bg-transparent p-4 font-mono text-sm leading-relaxed outline-none"
-            />
-          </div>
+          <PageEditViewerPanel
+            mode="create"
+            title={session.title}
+            draftMarkdown={draft}
+            editorResetKey={draftEditorKey}
+            bundleId={session.bundleId}
+            draftSaving={draftSaving}
+            draftSaved={draftSaved}
+            onDraftChange={(md) => {
+              setDraft(md);
+              setDraftSaved(false);
+            }}
+            onSaveDraft={() => void handleSaveDraft()}
+            onImport={openImport}
+            onAddQuote={(quote) => {
+              setQuotes((prev) => {
+                if (prev.some((q) => q.text === quote.text)) return prev;
+                return [...prev, quote].slice(-MAX_QUOTES_PER_MESSAGE);
+              });
+              requestAnimationFrame(() => promptRef.current?.focus());
+            }}
+          />
         )}
       </div>
 

@@ -968,9 +968,17 @@ export type AgentSession = AgentSessionSummary & {
   uploadCount: number;
   bundle: { id: string; slug: string; title: string; mode: string } | null;
   skills: Array<{ id: string; name: string }>;
+  mcpServers: Array<{
+    id: string;
+    name: string;
+    authType?: McpAuthType;
+    status?: McpServerStatus;
+  }>;
   mode: AgentSessionMode;
   targetPageId: string | null;
   sections: AgentPageSection[];
+  /** Assembled body (snapshot + accepted edits). Edit mode only. */
+  effectiveMarkdown: string | null;
 };
 
 export type AgentUpload = {
@@ -1012,6 +1020,7 @@ export function createAgentSession(input: {
   role?: string;
   aggressiveness?: AgentAggressiveness;
   skillIds?: string[];
+  mcpServerIds?: string[];
   mode?: AgentSessionMode;
   targetPageId?: string;
 }): Promise<AgentSession> {
@@ -1034,10 +1043,11 @@ export function decideSectionEdit(
 
 export function saveAgentPageEdit(
   sessionId: string,
+  content?: string,
 ): Promise<{ commitOid: string; branch: string }> {
   return request(`${API_URL}/agents/sessions/${sessionId}/save`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify(content !== undefined ? { content } : {}),
   });
 }
 
@@ -1148,6 +1158,127 @@ export function updateSkill(
 
 export function deleteSkill(id: string): Promise<{ deleted: string }> {
   return request(`${API_URL}/admin/skills/${id}`, { method: "DELETE" });
+}
+
+// ---- MCP servers ----
+
+export type McpTransport = "auto" | "http" | "sse";
+export type McpAuthType =
+  | "none"
+  | "headers"
+  | "oauth2_auth_code"
+  | "oauth2_client_credentials";
+export type McpServerStatus = "unknown" | "ok" | "error" | "needs_auth";
+
+export type McpServer = {
+  id: string;
+  name: string;
+  description: string | null;
+  authType: McpAuthType;
+  status: McpServerStatus;
+  toolNames: string[];
+};
+
+export type McpServerAdmin = McpServer & {
+  slug: string;
+  url: string;
+  transport: McpTransport;
+  authType: McpAuthType;
+  enabled: boolean;
+  headerNames: string[];
+  hasHeaders: boolean;
+  oauthUseDcr: boolean;
+  oauthClientId: string | null;
+  hasClientSecret: boolean;
+  oauthScopes: string | null;
+  oauthRedirectUri: string | null;
+  hasTokens: boolean;
+  oauthTokenExpiresAt: string | null;
+  lastError: string | null;
+  lastCheckedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type McpServerInput = {
+  name: string;
+  slug?: string;
+  description?: string | null;
+  url: string;
+  transport?: McpTransport;
+  authType?: McpAuthType;
+  enabled?: boolean;
+  headers?: Record<string, string>;
+  clearHeaders?: boolean;
+  oauthUseDcr?: boolean;
+  oauthClientId?: string | null;
+  oauthClientSecret?: string | null;
+  clearClientSecret?: boolean;
+  oauthScopes?: string | null;
+};
+
+export function fetchMcpServers(): Promise<McpServer[]> {
+  return request(`${API_URL}/mcp-servers`);
+}
+
+export function fetchAdminMcpServers(): Promise<McpServerAdmin[]> {
+  return request(`${API_URL}/admin/mcp-servers`);
+}
+
+export function createMcpServer(input: McpServerInput): Promise<McpServerAdmin> {
+  return request(`${API_URL}/admin/mcp-servers`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateMcpServer(id: string, input: Partial<McpServerInput>): Promise<McpServerAdmin> {
+  return request(`${API_URL}/admin/mcp-servers/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteMcpServer(id: string): Promise<{ deleted: string }> {
+  return request(`${API_URL}/admin/mcp-servers/${id}`, { method: "DELETE" });
+}
+
+export function testMcpServer(
+  id: string,
+): Promise<{ ok: boolean; tools?: string[]; error?: string; needsAuth?: boolean }> {
+  return request(`${API_URL}/admin/mcp-servers/${id}/test`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+/** Per-user OAuth start (any agent-accessible user). */
+export function startMcpOauth(
+  id: string,
+  returnTo?: string,
+): Promise<{ authorizationUrl: string | null; alreadyAuthorized?: boolean }> {
+  return request(`${API_URL}/mcp-servers/${id}/oauth/start`, {
+    method: "POST",
+    body: JSON.stringify({ returnTo }),
+  });
+}
+
+/** Admin alias that returns to /admin/mcp after consent. */
+export function startAdminMcpOauth(
+  id: string,
+): Promise<{ authorizationUrl: string | null; alreadyAuthorized?: boolean }> {
+  return request(`${API_URL}/admin/mcp-servers/${id}/oauth/start`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+/** Clear DCR client + all user tokens so the next Connect re-registers. */
+export function resetMcpOauthClient(id: string): Promise<McpServerAdmin> {
+  return request(`${API_URL}/admin/mcp-servers/${id}/oauth/reset-client`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }
 
 // ---- Search ----

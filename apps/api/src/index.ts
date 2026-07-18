@@ -26,6 +26,7 @@ import { pageRoutes } from "./routes/pages";
 import { permissionRoutes } from "./routes/permissions";
 import { presenceRoutes } from "./routes/presence";
 import { searchRoutes } from "./routes/search";
+import { mcpServerRoutes } from "./routes/mcp-servers";
 import { skillsRoutes } from "./routes/skills";
 import { sttSettingsRoutes } from "./routes/stt-settings";
 import { wikiVersionRoutes } from "./routes/wiki-versions";
@@ -93,6 +94,7 @@ await indexerRoutes(server, db, git);
 await chatRoutes(server, db, git);
 await agentSessionRoutes(server, db, git);
 await skillsRoutes(server, db);
+await mcpServerRoutes(server, db);
 
 const port = Number(process.env.PORT ?? 4000);
 const host = process.env.HOST ?? "0.0.0.0";

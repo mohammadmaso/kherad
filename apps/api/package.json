@@ -19,6 +19,8 @@
     "@kherad/db": "workspace:*",
     "@mastra/ai-sdk": "^1.6.2",
     "@mastra/core": "^1.51.0",
+    "@mastra/mcp": "^1.14.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "ai": "^7.0.29",
     "argon2": "^0.41.1",
     "drizzle-orm": "^0.38.3",

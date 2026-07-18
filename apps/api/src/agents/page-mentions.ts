@@ -92,3 +92,55 @@ The user explicitly attached these wiki pages to the conversation. Treat them as
 
 ${sections.join("\n\n---\n\n")}`;
 }
+
+export const TEXT_QUOTES_PART_TYPE = "data-textQuotes";
+
+export type TextQuoteMention = { text: string; sectionHeading?: string };
+
+const MAX_TEXT_QUOTES = 6;
+const MAX_QUOTE_CHARS = 2_000;
+
+/**
+ * Collects text excerpts from the latest user message (selected in the page
+ * preview and attached as `data-textQuotes` parts).
+ */
+export function extractTextQuotes(messages: UIMessage[]): TextQuoteMention[] {
+  const lastUser = [...messages].reverse().find((m) => m.role === "user");
+  if (!lastUser) return [];
+
+  const out: TextQuoteMention[] = [];
+  for (const part of lastUser.parts) {
+    if (!part || typeof part !== "object") continue;
+    const p = part as { type?: unknown; data?: unknown };
+    if (p.type !== TEXT_QUOTES_PART_TYPE || !Array.isArray(p.data)) continue;
+    for (const item of p.data) {
+      if (!item || typeof item !== "object") continue;
+      const q = item as Record<string, unknown>;
+      if (typeof q.text !== "string") continue;
+      const text = q.text.replace(/\s+/g, " ").trim().slice(0, MAX_QUOTE_CHARS);
+      if (text.length < 2) continue;
+      out.push({
+        text,
+        ...(typeof q.sectionHeading === "string" && q.sectionHeading.trim()
+          ? { sectionHeading: q.sectionHeading.trim() }
+          : {}),
+      });
+      if (out.length >= MAX_TEXT_QUOTES) return out;
+    }
+  }
+  return out;
+}
+
+/** Renders selected preview excerpts as an instructions block. */
+export function buildTextQuoteContext(quotes: TextQuoteMention[]): string {
+  if (quotes.length === 0) return "";
+  const blocks = quotes.map((q, i) => {
+    const where = q.sectionHeading ? ` (section: "${q.sectionHeading}")` : "";
+    return `${i + 1}.${where}\n> ${q.text}`;
+  });
+  return `\n\n## Excerpts the user selected from the page preview
+
+The user highlighted these passages in the document they are editing. Treat them as the focus of their request.
+
+${blocks.join("\n\n")}`;
+}

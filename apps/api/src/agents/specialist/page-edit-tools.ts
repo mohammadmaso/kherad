@@ -1,6 +1,7 @@
 import type { AuthedUser } from "@kherad/core/auth";
 import type { GitEngine } from "@kherad/core/git";
 import {
+  assembleDocument,
   renderMarkdownToHtml,
   splitIntoSections,
   type PageSection,
@@ -68,20 +69,21 @@ export function createPageEditTools(args: {
   const listPageSections = createTool({
     id: "list_page_sections",
     description:
-      "List the target page's top-level sections (id, heading, level, current edit status). Call this first. If sections is empty, the page has no headings to edit section-by-section.",
+      "List every heading section on the target page (id, heading, level, edit status). Sections are split on all heading depths (h1–h6), so prefer working with deeper headings (h3+) rather than whole h1/h2 chapters. Call this first. If sections is empty, the page has no headings to edit section-by-section.",
     inputSchema: z.object({}),
     execute: async () => {
       if (snapshot.sections.length === 0) {
         return {
           sections: [],
           topLevel: snapshot.topLevel,
-          note: "This page has no top-level headings to edit section-by-section. Tell the user and stop — do not invent sections.",
+          note: "This page has no headings to edit section-by-section. Tell the user and stop — do not invent sections.",
         };
       }
       const edits = await loadLatestEdits(db, sessionId);
       return {
         topLevel: snapshot.topLevel,
         hasPreamble: Boolean(snapshot.preamble?.trim()),
+        note: "Prefer reading and editing headingLevel >= 3 when available. Use h1/h2 only when that heading has no deeper children you need, or the task truly spans the whole chapter.",
         sections: snapshot.sections.map((section) => ({
           id: section.id,
           headingText: section.headingText,
@@ -96,7 +98,7 @@ export function createPageEditTools(args: {
   const readPageSection = createTool({
     id: "read_page_section",
     description:
-      "Read the effective markdown for one section by id from list_page_sections. Only read sections relevant to the task.",
+      "Read the effective markdown for one heading section by id from list_page_sections. Prefer low-level headings (h3–h6) so you load a small focused chunk — do not read large h1/h2 chapters when a deeper section covers the task. Only read sections relevant to the task.",
     inputSchema: z.object({
       sectionId: z.string().describe("Section id from list_page_sections"),
     }),
@@ -106,12 +108,26 @@ export function createPageEditTools(args: {
         return { error: `Unknown section id "${sectionId}". Call list_page_sections first.` };
       }
       const edits = await loadLatestEdits(db, sessionId);
+      const deeper = snapshot.sections.filter(
+        (s) => s.orderIndex > section.orderIndex && s.headingLevel > section.headingLevel,
+      );
+      const nextSameOrHigher = snapshot.sections.find(
+        (s) => s.orderIndex > section.orderIndex && s.headingLevel <= section.headingLevel,
+      );
+      const childCount = deeper.filter(
+        (s) => !nextSameOrHigher || s.orderIndex < nextSameOrHigher.orderIndex,
+      ).length;
       return {
         sectionId: section.id,
         headingText: section.headingText,
         headingLevel: section.headingLevel,
         status: sectionStatus(section, edits),
         markdown: effectiveMarkdown(section, edits),
+        ...(section.headingLevel <= 2 && childCount > 0
+          ? {
+              hint: `This is an h${section.headingLevel} with ${childCount} deeper heading section(s) under it. Prefer read_page_section on those child ids instead of relying on this coarse chunk.`,
+            }
+          : {}),
       };
     },
   });
@@ -119,7 +135,7 @@ export function createPageEditTools(args: {
   const proposeSectionEdit = createTool({
     id: "propose_section_edit",
     description:
-      "Propose a replacement markdown body for one existing section. The user must Accept or Reject before it affects the saved page. Do not re-propose a section that is still awaiting a decision.",
+      "Propose a replacement markdown body for one existing heading section (prefer h3+). The user must Accept or Reject before it affects the saved page. Do not re-propose a section that is still awaiting a decision.",
     inputSchema: z.object({
       sectionId: z.string().describe("Section id from list_page_sections"),
       newMarkdown: z
@@ -208,7 +224,7 @@ export async function buildSectionEditsStatusContext(
   snapshot: SectionSplitResult,
 ): Promise<string> {
   if (snapshot.sections.length === 0) {
-    return "\n\n## Page section edit status\n\nThis page has no top-level headings — section-by-section editing is not available.";
+    return "\n\n## Page section edit status\n\nThis page has no headings — section-by-section editing is not available.";
   }
 
   const edits = await loadLatestEdits(db, sessionId);
@@ -242,6 +258,16 @@ export async function loadAcceptedSectionOverrides(
   return overrides;
 }
 
+/** Snapshot + latest accepted section overrides → full page markdown. */
+export async function buildEffectiveDocumentMarkdown(
+  db: Database,
+  sessionId: string,
+  snapshotMarkdown: string,
+): Promise<string> {
+  const overrides = await loadAcceptedSectionOverrides(db, sessionId);
+  return assembleDocument(splitIntoSections(snapshotMarkdown), overrides);
+}
+
 /** Build the sections array for GET session (rendered HTML for the viewer). */
 export async function buildSessionSectionsView(
   db: Database,
@@ -269,19 +295,17 @@ export async function buildSessionSectionsView(
       const accepted = latestAccepted(edits, section.id);
       const pending = edits.find((e) => e.sectionId === section.id && e.status === "proposed");
       const effective = effectiveMarkdown(section, edits);
-      const html =
-        accepted?.proposedHtml ??
-        (status === "proposed" && pending ? pending.baseHtml : null) ??
-        (await renderMarkdownToHtml(effective));
 
-      // When a proposal is pending, show the current (pre-accept) content in the
-      // viewer; the proposal card shows before/after. After accept, show proposed.
-      const viewerHtml =
-        status === "accepted" && accepted
-          ? accepted.proposedHtml
-          : status === "proposed" && pending
-            ? pending.baseHtml
-            : html;
+      // Pending proposals preview the proposed HTML; accepted show the new body;
+      // otherwise render the effective (accepted-or-original) markdown.
+      let viewerHtml: string;
+      if (status === "proposed" && pending) {
+        viewerHtml = pending.proposedHtml;
+      } else if (status === "accepted" && accepted) {
+        viewerHtml = accepted.proposedHtml;
+      } else {
+        viewerHtml = await renderMarkdownToHtml(effective);
+      }
 
       return {
         id: section.id,

@@ -24,6 +24,8 @@ import { HeadingNode, QuoteNode } from "@lexical/rich-text";
 import { TableCellNode, TableNode, TableRowNode } from "@lexical/table";
 import type { ReactNode } from "react";
 
+import { cn } from "@kherad/ui/lib/utils";
+
 import { useI18n } from "@/lib/i18n/provider";
 
 import { ImageNode } from "./nodes/image-node";
@@ -138,12 +140,18 @@ export function Editor({
   initialMarkdown,
   onMarkdownChange,
   bundleId,
+  contentClassName,
+  className,
   children,
 }: {
   initialMarkdown: string;
   onMarkdownChange?: (markdown: string) => void;
   /** Enables bundle-scoped features: image upload, page picker links, and `[[` page links. */
   bundleId?: string;
+  /** Overrides the ContentEditable min-height / padding classes. */
+  contentClassName?: string;
+  /** Root wrapper classes (e.g. `h-full flex-1` inside a constrained flex panel). */
+  className?: string;
   children?: ReactNode;
 }) {
   const { t } = useI18n();
@@ -159,13 +167,15 @@ export function Editor({
 
   return (
     <LexicalComposer initialConfig={initialConfig}>
-      <div className="flex flex-col gap-2">
+      <div className={cn("flex min-h-0 flex-col gap-2", className)}>
         <Toolbar bundleId={bundleId} />
-        <div className="border-input bg-background relative rounded-lg border">
+        <div className="border-input bg-background relative min-h-[12rem] flex-1 overflow-y-auto rounded-lg border">
           <RichTextPlugin
             contentEditable={
               <ContentEditable
-                className="min-h-[400px] px-4 py-3 text-sm outline-none"
+                className={
+                  contentClassName ?? "min-h-[400px] px-4 py-3 text-sm outline-none"
+                }
                 aria-placeholder={t.editor.placeholder}
                 placeholder={
                   <div className="text-muted-foreground pointer-events-none absolute start-4 top-3 text-sm">

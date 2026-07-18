@@ -12,7 +12,7 @@ import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 export function Conversation({ className, ...props }: ComponentProps<typeof StickToBottom>) {
   return (
     <StickToBottom
-      className={cn("relative flex-1 overflow-y-auto", className)}
+      className={cn("relative min-h-0 flex-1 overflow-y-auto overscroll-contain", className)}
       initial="smooth"
       // Streaming appends resize the content many times per second; an animated
       // follow restarts on every resize and makes the pinned view jitter, so

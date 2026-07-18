@@ -90,6 +90,20 @@ export const agentAggressivenessEnum = pgEnum("agent_aggressiveness", [
   "balanced",
   "aggressive",
 ]);
+// MCP remote-server connection: transport preference and auth mode.
+export const mcpTransportEnum = pgEnum("mcp_transport", ["auto", "http", "sse"]);
+export const mcpAuthTypeEnum = pgEnum("mcp_auth_type", [
+  "none",
+  "headers",
+  "oauth2_auth_code",
+  "oauth2_client_credentials",
+]);
+export const mcpServerStatusEnum = pgEnum("mcp_server_status", [
+  "unknown",
+  "ok",
+  "error",
+  "needs_auth",
+]);
 
 export const users = pgTable(
   "users",
@@ -629,6 +643,90 @@ export const agentSessionSkills = pgTable(
   (table) => [primaryKey({ columns: [table.sessionId, table.skillId] })],
 );
 
+/**
+ * Admin-managed external MCP server connections. Secrets (headers blob,
+ * OAuth client secret, DCR client info, tokens, PKCE verifier) are AES-GCM
+ * encrypted via encryptRemoteToken. `slug` namespaces tools as slug_toolName.
+ */
+export const mcpServers = pgTable("mcp_servers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  slug: text("slug").notNull().unique(),
+  description: text("description"),
+  url: text("url").notNull(),
+  transport: mcpTransportEnum("transport").notNull().default("auto"),
+  authType: mcpAuthTypeEnum("auth_type").notNull().default("none"),
+  enabled: boolean("enabled").notNull().default(true),
+  // headers auth: entire {name:value} map JSON encrypted as one blob.
+  headersEnc: text("headers_enc"),
+  // Plaintext header names for admin display (values never stored here).
+  headerNames: jsonb("header_names").$type<string[]>(),
+  // OAuth config
+  oauthUseDcr: boolean("oauth_use_dcr").notNull().default(true),
+  oauthClientId: text("oauth_client_id"),
+  oauthClientSecretEnc: text("oauth_client_secret_enc"),
+  oauthScopes: text("oauth_scopes"),
+  oauthClientInfoEnc: text("oauth_client_info_enc"),
+  // Shared machine tokens for oauth2_client_credentials only.
+  // Auth-code tokens live in mcp_user_auths (per user).
+  oauthTokensEnc: text("oauth_tokens_enc"),
+  oauthTokenExpiresAt: timestamp("oauth_token_expires_at", { withTimezone: true }),
+  // Legacy pending auth-code columns — unused; pending state is per-user.
+  oauthPendingState: text("oauth_pending_state"),
+  oauthPendingVerifierEnc: text("oauth_pending_verifier_enc"),
+  oauthPendingExpiresAt: timestamp("oauth_pending_expires_at", { withTimezone: true }),
+  // Health / cached tool list from last admin test (or shared auth modes).
+  status: mcpServerStatusEnum("status").notNull().default("unknown"),
+  lastError: text("last_error"),
+  lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
+  toolNames: jsonb("tool_names").$type<string[]>(),
+  createdById: uuid("created_by_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Per-user OAuth authorization-code tokens for an MCP server. Each agent
+ * user Connects once; their access/refresh tokens are never shared.
+ */
+export const mcpUserAuths = pgTable(
+  "mcp_user_auths",
+  {
+    mcpServerId: uuid("mcp_server_id")
+      .notNull()
+      .references(() => mcpServers.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    oauthTokensEnc: text("oauth_tokens_enc"),
+    oauthTokenExpiresAt: timestamp("oauth_token_expires_at", { withTimezone: true }),
+    oauthPendingState: text("oauth_pending_state"),
+    oauthPendingVerifierEnc: text("oauth_pending_verifier_enc"),
+    oauthPendingExpiresAt: timestamp("oauth_pending_expires_at", { withTimezone: true }),
+    /** Relative web path to redirect after OAuth callback (e.g. /agents/new). */
+    oauthReturnTo: text("oauth_return_to"),
+    status: mcpServerStatusEnum("status").notNull().default("unknown"),
+    lastError: text("last_error"),
+    lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.mcpServerId, table.userId] })],
+);
+
+export const agentSessionMcpServers = pgTable(
+  "agent_session_mcp_servers",
+  {
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => agentSessions.id, { onDelete: "cascade" }),
+    mcpServerId: uuid("mcp_server_id")
+      .notNull()
+      .references(() => mcpServers.id, { onDelete: "cascade" }),
+  },
+  (table) => [primaryKey({ columns: [table.sessionId, table.mcpServerId] })],
+);
+
 export const usersRelations = relations(users, ({ many }) => ({
   sessions: many(sessions),
   permissions: many(permissions),
@@ -641,6 +739,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   indexerRuns: many(indexerRuns),
   agentSessions: many(agentSessions),
   notifications: many(notifications),
+  mcpUserAuths: many(mcpUserAuths),
 }));
 
 export const sessionsRelations = relations(sessions, ({ one }) => ({
@@ -759,6 +858,7 @@ export const agentSessionsRelations = relations(agentSessions, ({ one, many }) =
   messages: many(agentMessages),
   uploads: many(agentUploads),
   sessionSkills: many(agentSessionSkills),
+  sessionMcpServers: many(agentSessionMcpServers),
   sectionEdits: many(agentSectionEdits),
 }));
 
@@ -799,4 +899,29 @@ export const agentSessionSkillsRelations = relations(agentSessionSkills, ({ one 
     references: [agentSessions.id],
   }),
   skill: one(skills, { fields: [agentSessionSkills.skillId], references: [skills.id] }),
+}));
+
+export const mcpServersRelations = relations(mcpServers, ({ one, many }) => ({
+  createdBy: one(users, { fields: [mcpServers.createdById], references: [users.id] }),
+  sessionMcpServers: many(agentSessionMcpServers),
+  userAuths: many(mcpUserAuths),
+}));
+
+export const mcpUserAuthsRelations = relations(mcpUserAuths, ({ one }) => ({
+  mcpServer: one(mcpServers, {
+    fields: [mcpUserAuths.mcpServerId],
+    references: [mcpServers.id],
+  }),
+  user: one(users, { fields: [mcpUserAuths.userId], references: [users.id] }),
+}));
+
+export const agentSessionMcpServersRelations = relations(agentSessionMcpServers, ({ one }) => ({
+  session: one(agentSessions, {
+    fields: [agentSessionMcpServers.sessionId],
+    references: [agentSessions.id],
+  }),
+  mcpServer: one(mcpServers, {
+    fields: [agentSessionMcpServers.mcpServerId],
+    references: [mcpServers.id],
+  }),
 }));

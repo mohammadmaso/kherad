@@ -6,6 +6,7 @@ import {
   GitPullRequestIcon,
   LibraryIcon,
   PanelLeftIcon,
+  PlugZapIcon,
   ScanTextIcon,
   SparklesIcon,
   UsersIcon,
@@ -74,6 +75,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     { href: "/admin/merge-requests", label: t.admin.mergeRequests, icon: GitPullRequestIcon },
     { href: "/admin/ai", label: t.admin.ai, icon: SparklesIcon },
     { href: "/admin/skills", label: t.admin.skills, icon: WandSparklesIcon },
+    { href: "/admin/mcp", label: t.admin.mcp, icon: PlugZapIcon },
     { href: "/admin/ocr", label: t.admin.ocr, icon: ScanTextIcon },
     { href: "/admin/stt", label: t.admin.stt, icon: AudioLinesIcon },
     { href: "/admin/embeddings", label: t.admin.embeddings, icon: VectorSquareIcon },
@@ -91,7 +93,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   // Close the drawer whenever the route changes (e.g. browser back).
   useEffect(() => {
-    setMobileOpen(false);
+    const id = window.setTimeout(() => setMobileOpen(false), 0);
+    return () => window.clearTimeout(id);
   }, [pathname]);
 
   const activeTab = tabs.find(

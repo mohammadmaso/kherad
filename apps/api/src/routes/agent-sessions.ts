@@ -18,6 +18,7 @@ import type { FastifyInstance } from "fastify";
 
 import { pageEditInstructions } from "../agents/specialist/page-edit-prompt";
 import {
+  buildEffectiveDocumentMarkdown,
   buildSectionEditsStatusContext,
   buildSessionSectionsView,
   createPageEditTools,
@@ -25,8 +26,14 @@ import {
 } from "../agents/specialist/page-edit-tools";
 import { specialistInstructions, type Aggressiveness } from "../agents/specialist/prompt";
 import { createSpecialistTools } from "../agents/specialist/tools";
+import { loadSessionMcpTools, userMcpStatus, type McpServerRow } from "../agents/mcp";
 import { loadSessionSkills } from "../agents/skills";
-import { buildPageMentionContext, extractPageMentions } from "../agents/page-mentions";
+import {
+  buildPageMentionContext,
+  buildTextQuoteContext,
+  extractPageMentions,
+  extractTextQuotes,
+} from "../agents/page-mentions";
 import { startIndexerRun } from "../agents/indexer/run";
 import { buildModel, loadAiSettings } from "../agents/settings";
 import { getBundleOrNull, isUuid } from "../lib/get-bundle";
@@ -38,6 +45,7 @@ const MAX_UPLOAD_BYTES = 256 * 1024;
 const MAX_UPLOADS_PER_SESSION = 10;
 const MAX_ROLE_CHARS = 80;
 const MAX_SKILLS_PER_SESSION = 20;
+const MAX_MCP_SERVERS_PER_SESSION = 10;
 const TEXT_MIME_PREFIXES = ["text/", "application/json", "application/csv"];
 const TEXT_EXTENSIONS = new Set([".md", ".txt", ".csv", ".json", ".markdown", ".tsv"]);
 const DEFAULT_SESSION_TITLE = "Specialist session";
@@ -135,13 +143,37 @@ async function resolveSkillIds(db: Database, ids: unknown): Promise<string[]> {
   return rows.map((r) => r.id);
 }
 
+/** Resolves enabled MCP servers from the given ids, capped and de-duped. */
+async function resolveMcpServerIds(db: Database, ids: unknown): Promise<string[]> {
+  if (!Array.isArray(ids)) return [];
+  const requested = [
+    ...new Set(
+      ids.filter((id): id is string => typeof id === "string" && isUuid(id)),
+    ),
+  ].slice(0, MAX_MCP_SERVERS_PER_SESSION);
+  if (requested.length === 0) return [];
+  const rows = await db.query.mcpServers.findMany({
+    where: and(inArray(schema.mcpServers.id, requested), eq(schema.mcpServers.enabled, true)),
+    columns: { id: true },
+  });
+  return rows.map((r) => r.id);
+}
+
 function toSessionResponse(
   session: typeof schema.agentSessions.$inferSelect,
   extras?: {
     uploadCount?: number;
     bundle?: { id: string; slug: string; title: string; mode: string } | null;
     skills?: Array<{ id: string; name: string }>;
+    mcpServers?: Array<{
+      id: string;
+      name: string;
+      authType: string;
+      status: string;
+    }>;
     sections?: Awaited<ReturnType<typeof buildSessionSectionsView>>;
+    /** Assembled body markdown (snapshot + accepted section edits). Edit mode only. */
+    effectiveMarkdown?: string | null;
   },
 ) {
   return {
@@ -160,7 +192,9 @@ function toSessionResponse(
     uploadCount: extras?.uploadCount ?? 0,
     bundle: extras?.bundle ?? null,
     skills: extras?.skills ?? [],
+    mcpServers: extras?.mcpServers ?? [],
     sections: extras?.sections ?? [],
+    effectiveMarkdown: extras?.effectiveMarkdown ?? null,
   };
 }
 
@@ -200,6 +234,7 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
       role?: string;
       aggressiveness?: string;
       skillIds?: string[];
+      mcpServerIds?: string[];
       mode?: "create" | "edit";
       targetPageId?: string;
     };
@@ -252,7 +287,10 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
       }
       const snapshotMarkdown = new TextDecoder().decode(contentBytes);
 
-      const skillIds = await resolveSkillIds(db, request.body?.skillIds);
+      const [skillIds, mcpServerIds] = await Promise.all([
+        resolveSkillIds(db, request.body?.skillIds),
+        resolveMcpServerIds(db, request.body?.mcpServerIds),
+      ]);
       const [session] = await db
         .insert(schema.agentSessions)
         .values({
@@ -279,6 +317,11 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
           .insert(schema.agentSessionSkills)
           .values(skillIds.map((skillId) => ({ sessionId: session.id, skillId })));
       }
+      if (mcpServerIds.length > 0) {
+        await db.insert(schema.agentSessionMcpServers).values(
+          mcpServerIds.map((mcpServerId) => ({ sessionId: session.id, mcpServerId })),
+        );
+      }
 
       reply.code(201);
       return toSessionResponse(session, {
@@ -302,7 +345,10 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
       bundleId = null;
     }
 
-    const skillIds = await resolveSkillIds(db, request.body?.skillIds);
+    const [skillIds, mcpServerIds] = await Promise.all([
+      resolveSkillIds(db, request.body?.skillIds),
+      resolveMcpServerIds(db, request.body?.mcpServerIds),
+    ]);
 
     const [session] = await db
       .insert(schema.agentSessions)
@@ -327,6 +373,11 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
         .insert(schema.agentSessionSkills)
         .values(skillIds.map((skillId) => ({ sessionId: session.id, skillId })));
     }
+    if (mcpServerIds.length > 0) {
+      await db.insert(schema.agentSessionMcpServers).values(
+        mcpServerIds.map((mcpServerId) => ({ sessionId: session.id, mcpServerId })),
+      );
+    }
 
     reply.code(201);
     return toSessionResponse(session, { uploadCount: 0 });
@@ -342,7 +393,15 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
         return reply.code(404).send({ error: "Session not found" });
       }
 
-      const [uploads, messages, bundle, sessionSkills, sections] = await Promise.all([
+      const [
+        uploads,
+        messages,
+        bundle,
+        sessionSkills,
+        sessionMcpServers,
+        sections,
+        effectiveMarkdown,
+      ] = await Promise.all([
         db.query.agentUploads.findMany({
           where: eq(schema.agentUploads.sessionId, session.id),
           columns: {
@@ -363,10 +422,43 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
           where: eq(schema.agentSessionSkills.sessionId, session.id),
           with: { skill: { columns: { id: true, name: true } } },
         }),
+        db.query.agentSessionMcpServers.findMany({
+          where: eq(schema.agentSessionMcpServers.sessionId, session.id),
+          with: {
+            mcpServer: {
+              columns: { id: true, name: true, authType: true, status: true, enabled: true },
+            },
+          },
+        }),
         session.mode === "edit" && session.targetSnapshotMarkdown
           ? buildSessionSectionsView(db, session.id, session.targetSnapshotMarkdown)
           : Promise.resolve([]),
+        session.mode === "edit" && session.targetSnapshotMarkdown
+          ? buildEffectiveDocumentMarkdown(db, session.id, session.targetSnapshotMarkdown)
+          : Promise.resolve(null),
       ]);
+
+      const mcpServers = await Promise.all(
+        sessionMcpServers
+          .map((row) => row.mcpServer)
+          .filter(
+            (
+              s,
+            ): s is {
+              id: string;
+              name: string;
+              authType: McpServerRow["authType"];
+              status: McpServerRow["status"];
+              enabled: boolean;
+            } => s !== null && s.enabled,
+          )
+          .map(async (s) => ({
+            id: s.id,
+            name: s.name,
+            authType: s.authType,
+            status: await userMcpStatus(db, s, session.userId),
+          })),
+      );
 
       return {
         session: toSessionResponse(session, {
@@ -377,7 +469,9 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
           skills: sessionSkills
             .map((row) => row.skill)
             .filter((s): s is { id: string; name: string } => s !== null),
+          mcpServers,
           sections,
+          effectiveMarkdown,
         }),
         uploads: uploads.map((u) => ({
           id: u.id,
@@ -605,107 +699,143 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
       }
     }
 
-    const [bundle, uploadRows, sessionSkills] = await Promise.all([
+    const [bundle, uploadRows, sessionSkills, mcpResult] = await Promise.all([
       session.bundleId ? getBundleOrNull(db, session.bundleId) : Promise.resolve(null),
       db.query.agentUploads.findMany({
         where: eq(schema.agentUploads.sessionId, session.id),
         columns: { id: true },
       }),
       loadSessionSkills(db, session.id),
+      loadSessionMcpTools(db, session.id, session.userId, server.log),
     ]);
 
-    const mentionContext = await buildPageMentionContext({
-      db,
-      git,
-      user,
-      mentions: extractPageMentions(messages),
+    for (const warning of mcpResult.warnings) {
+      server.log.warn({ sessionId: session.id }, warning);
+    }
+
+    const disconnectMcp = mcpResult.disconnect;
+    let disconnected = false;
+    const safeDisconnect = () => {
+      if (disconnected) return Promise.resolve();
+      disconnected = true;
+      return disconnectMcp().catch((err) => {
+        server.log.warn({ err, sessionId: session.id }, "mcp disconnect failed");
+      });
+    };
+    request.raw.on("close", () => {
+      void safeDisconnect();
     });
 
-    const isEdit = session.mode === "edit";
-    const snapshot = isEdit
-      ? splitIntoSections(session.targetSnapshotMarkdown ?? "")
-      : null;
-
-    let instructions: string;
-    let tools: ReturnType<typeof createSpecialistTools> | ReturnType<typeof createPageEditTools>;
-
-    if (isEdit && snapshot) {
-      const statusContext = await buildSectionEditsStatusContext(db, session.id, snapshot);
-      instructions =
-        pageEditInstructions({
-          role: session.role,
-          goal: session.goal,
-          pageTitle: session.title,
-          bundleTitle: bundle?.title ?? null,
-          hasUploads: uploadRows.length > 0,
-          aggressiveness: session.aggressiveness,
-          skills: sessionSkills,
-        }) +
-        statusContext +
-        mentionContext;
-      tools = createPageEditTools({
+    try {
+      const mentionContext = await buildPageMentionContext({
         db,
         git,
         user,
-        sessionId: session.id,
-        snapshot,
+        mentions: extractPageMentions(messages),
       });
-    } else {
-      instructions =
-        specialistInstructions({
-          role: session.role,
-          goal: session.goal,
-          bundleTitle: bundle?.title ?? null,
-          hasUploads: uploadRows.length > 0,
-          aggressiveness: session.aggressiveness,
-          skills: sessionSkills,
-        }) + mentionContext;
-      tools = createSpecialistTools({ db, git, user, sessionId: session.id });
-    }
+      const quoteContext = buildTextQuoteContext(extractTextQuotes(messages));
+      const attachmentContext = mentionContext + quoteContext;
 
-    const agent = new Agent({
-      id: "specialist",
-      name: "Specialist",
-      instructions,
-      model: buildModel(settings, "interviewer"),
-      tools,
-    });
+      const isEdit = session.mode === "edit";
+      const snapshot = isEdit
+        ? splitIntoSections(session.targetSnapshotMarkdown ?? "")
+        : null;
 
-    const agentStream = await agent.stream(messages, { maxSteps: MAX_AGENT_STEPS });
-    const chunkStream = toAISdkStream(agentStream, {
-      from: "agent",
-    }) as unknown as ReadableStream<UIMessageChunk>;
+      let instructions: string;
+      let tools: Record<string, unknown>;
 
-    const uiStream = createUIMessageStream({
-      originalMessages: messages,
-      execute: ({ writer }) => {
-        writer.merge(chunkStream);
-      },
-      onFinish: async ({ responseMessage }) => {
-        try {
-          await db.insert(schema.agentMessages).values({
+      if (isEdit && snapshot) {
+        const statusContext = await buildSectionEditsStatusContext(db, session.id, snapshot);
+        instructions =
+          pageEditInstructions({
+            role: session.role,
+            goal: session.goal,
+            pageTitle: session.title,
+            bundleTitle: bundle?.title ?? null,
+            hasUploads: uploadRows.length > 0,
+            aggressiveness: session.aggressiveness,
+            skills: sessionSkills,
+          }) +
+          statusContext +
+          attachmentContext;
+        tools = {
+          ...createPageEditTools({
+            db,
+            git,
+            user,
             sessionId: session.id,
-            role: "assistant",
-            parts: responseMessage.parts,
-          });
-          await db
-            .update(schema.agentSessions)
-            .set({ updatedAt: new Date() })
-            .where(eq(schema.agentSessions.id, session.id));
-        } catch (err) {
-          server.log.error({ err, sessionId: session.id }, "failed to persist agent chat");
-        }
-      },
-    });
+            snapshot,
+          }),
+          ...mcpResult.tools,
+        };
+      } else {
+        instructions =
+          specialistInstructions({
+            role: session.role,
+            goal: session.goal,
+            bundleTitle: bundle?.title ?? null,
+            hasUploads: uploadRows.length > 0,
+            aggressiveness: session.aggressiveness,
+            skills: sessionSkills,
+          }) + attachmentContext;
+        tools = {
+          ...createSpecialistTools({ db, git, user, sessionId: session.id }),
+          ...mcpResult.tools,
+        };
+      }
 
-    const response = createUIMessageStreamResponse({ stream: uiStream });
-    reply.status(response.status);
-    for (const [key, value] of response.headers) {
-      reply.header(key, value);
+      const agent = new Agent({
+        id: "specialist",
+        name: "Specialist",
+        instructions,
+        model: buildModel(settings, "interviewer"),
+        // Built-in specialist/page-edit tools plus namespaced MCP tools (slug_toolName).
+        tools: tools as ReturnType<typeof createSpecialistTools>,
+      });
+
+      const agentStream = await agent.stream(messages, { maxSteps: MAX_AGENT_STEPS });
+      const chunkStream = toAISdkStream(agentStream, {
+        from: "agent",
+      }) as unknown as ReadableStream<UIMessageChunk>;
+
+      const uiStream = createUIMessageStream({
+        originalMessages: messages,
+        execute: ({ writer }) => {
+          writer.merge(chunkStream);
+        },
+        onFinish: async ({ responseMessage }) => {
+          try {
+            await db.insert(schema.agentMessages).values({
+              sessionId: session.id,
+              role: "assistant",
+              parts: responseMessage.parts,
+            });
+            await db
+              .update(schema.agentSessions)
+              .set({ updatedAt: new Date() })
+              .where(eq(schema.agentSessions.id, session.id));
+          } catch (err) {
+            server.log.error({ err, sessionId: session.id }, "failed to persist agent chat");
+          } finally {
+            await safeDisconnect();
+          }
+        },
+      });
+
+      const response = createUIMessageStreamResponse({ stream: uiStream });
+      reply.status(response.status);
+      for (const [key, value] of response.headers) {
+        reply.header(key, value);
+      }
+      return reply.send(
+        response.body
+          ? Readable.fromWeb(response.body as import("stream/web").ReadableStream)
+          : "",
+      );
+    } catch (err) {
+      await safeDisconnect();
+      throw err;
     }
-    return reply.send(
-      response.body ? Readable.fromWeb(response.body as import("stream/web").ReadableStream) : "",
-    );
   });
 
   server.post<{
@@ -762,70 +892,82 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
     };
   });
 
-  server.post<{ Params: { sessionId: string } }>(
-    "/agents/sessions/:sessionId/save",
-    async (request, reply) => {
-      if (!(await requireAgentAccess(db, request.user, reply))) return;
-      const user = request.user!;
-      const session = await loadOwnedSession(db, request.params.sessionId, user.id, user.isAdmin);
-      if (!session) {
-        return reply.code(404).send({ error: "Session not found" });
-      }
-      if (session.mode !== "edit") {
-        return reply.code(400).send({ error: "Session is not in edit mode" });
-      }
-      if (!session.targetPageId || !session.targetSnapshotMarkdown || !session.bundleId) {
-        return reply.code(400).send({ error: "Edit session is missing target page data" });
-      }
+  server.post<{
+    Params: { sessionId: string };
+    Body: { content?: string };
+  }>("/agents/sessions/:sessionId/save", async (request, reply) => {
+    if (!(await requireAgentAccess(db, request.user, reply))) return;
+    const user = request.user!;
+    const session = await loadOwnedSession(db, request.params.sessionId, user.id, user.isAdmin);
+    if (!session) {
+      return reply.code(404).send({ error: "Session not found" });
+    }
+    if (session.mode !== "edit") {
+      return reply.code(400).send({ error: "Session is not in edit mode" });
+    }
+    if (!session.targetPageId || !session.targetSnapshotMarkdown || !session.bundleId) {
+      return reply.code(400).send({ error: "Edit session is missing target page data" });
+    }
 
-      const page = await db.query.pages.findFirst({
-        where: and(
-          eq(schema.pages.id, session.targetPageId),
-          eq(schema.pages.source, "raw"),
-          eq(schema.pages.isDeleted, false),
-        ),
-      });
-      if (!page) {
-        return reply.code(404).send({ error: "Page not found" });
-      }
+    const page = await db.query.pages.findFirst({
+      where: and(
+        eq(schema.pages.id, session.targetPageId),
+        eq(schema.pages.source, "raw"),
+        eq(schema.pages.isDeleted, false),
+      ),
+    });
+    if (!page) {
+      return reply.code(404).send({ error: "Page not found" });
+    }
 
-      const bundle = await getBundleOrNull(db, session.bundleId);
-      if (!bundle || bundle.archivedAt) {
-        return reply.code(404).send({ error: "Bundle not found" });
-      }
+    const bundle = await getBundleOrNull(db, session.bundleId);
+    if (!bundle || bundle.archivedAt) {
+      return reply.code(404).send({ error: "Bundle not found" });
+    }
 
-      const allowed = await checkPermission(db, user, bundle, page.path, "edit");
-      if (!allowed) {
-        return reply.code(403).send({ error: "Forbidden" });
-      }
+    const allowed = await checkPermission(db, user, bundle, page.path, "edit");
+    if (!allowed) {
+      return reply.code(403).send({ error: "Forbidden" });
+    }
 
+    const manualContent =
+      typeof request.body?.content === "string" ? request.body.content : null;
+
+    let content: string;
+    if (manualContent !== null) {
+      content = manualContent;
+    } else {
       const overrides = await loadAcceptedSectionOverrides(db, session.id);
       if (overrides.size === 0) {
         return reply.code(400).send({ error: "No accepted section edits to save" });
       }
+      content = assembleDocument(splitIntoSections(session.targetSnapshotMarkdown), overrides);
+    }
 
-      const content = assembleDocument(
-        splitIntoSections(session.targetSnapshotMarkdown),
-        overrides,
-      );
+    if (!content.trim()) {
+      return reply.code(400).send({ error: "Content must not be empty" });
+    }
 
-      const { commitOid, branch } = await writePageContent(
-        git,
-        bundle,
-        page,
-        content,
-        user,
-        `Agent edit: ${page.path}`,
-      );
+    const { commitOid, branch } = await writePageContent(
+      git,
+      bundle,
+      page,
+      content,
+      user,
+      `Agent edit: ${page.path}`,
+    );
 
-      await db
-        .update(schema.agentSessions)
-        .set({ status: "draft_ready", updatedAt: new Date() })
-        .where(eq(schema.agentSessions.id, session.id));
+    await db
+      .update(schema.agentSessions)
+      .set({
+        status: "draft_ready",
+        draftMarkdown: content,
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.agentSessions.id, session.id));
 
-      return { commitOid, branch };
-    },
-  );
+    return { commitOid, branch };
+  });
 
   server.post<{
     Params: { sessionId: string };

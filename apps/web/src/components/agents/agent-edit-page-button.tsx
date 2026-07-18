@@ -29,7 +29,7 @@ export function AgentEditPageButton({
         targetPageId: pageId,
         bundleId,
       });
-      router.push(`/agents/sessions/${session.id}`);
+      router.push(`/agents/${session.id}`);
     } catch {
       setBusy(false);
     }

@@ -19,19 +19,20 @@ export type SectionEditProposal = {
 };
 
 /**
- * Before/after rendered HTML for a propose_section_edit tool result.
- * Accept/Reject persist via REST; never touches markdown.
+ * Compact HITL card for the chat stream (no heavy HTML — keeps stick-to-bottom
+ * stable). Pass `variant="diff"` for the full before/after document preview.
  */
 export function SectionEditProposalCard({
   sessionId,
   proposal,
   readOnly = false,
+  variant = "compact",
   onDecided,
 }: {
   sessionId: string;
   proposal: SectionEditProposal;
-  /** History / viewer mode — hide action buttons. */
   readOnly?: boolean;
+  variant?: "compact" | "diff";
   onDecided?: (status: "accepted" | "rejected") => void;
 }) {
   const { t } = useI18n();
@@ -39,16 +40,11 @@ export function SectionEditProposalCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Prefer a decided status from the parent (after reload); otherwise local
-  // optimistic status, else the proposal payload default ("proposed").
   const status =
     proposal.status !== "proposed" ? proposal.status : (localStatus ?? proposal.status);
 
   const linesChanged = useMemo(() => {
-    const parts = diffLines(
-      stripTags(proposal.baseHtml),
-      stripTags(proposal.proposedHtml),
-    );
+    const parts = diffLines(stripTags(proposal.baseHtml), stripTags(proposal.proposedHtml));
     let added = 0;
     let removed = 0;
     for (const part of parts) {
@@ -76,45 +72,84 @@ export function SectionEditProposalCard({
   }
 
   const decided = status !== "proposed";
+  const statusLabel =
+    status === "proposed"
+      ? t.agents.sectionStatusProposed
+      : status === "accepted"
+        ? t.agents.sectionStatusAccepted
+        : status === "rejected"
+          ? t.agents.sectionStatusRejected
+          : t.agents.sectionStatusSuperseded;
+
+  if (variant === "compact") {
+    return (
+      <div className="border-border bg-background/80 my-2 rounded-xl border px-3 py-2.5 shadow-sm backdrop-blur-sm transition-[opacity,transform] duration-200 ease-out-spring">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium tracking-[-0.01em]" dir="auto">
+              {proposal.headingText || proposal.sectionId}
+            </p>
+            <p className="text-muted-foreground mt-0.5 text-xs tabular-nums">
+              {t.agents.sectionLinesChanged(linesChanged)}
+              <span className="text-muted-foreground/70"> · {t.agents.sectionReviewInPreview}</span>
+            </p>
+          </div>
+          <Badge variant={status === "proposed" ? "warning" : "secondary"}>{statusLabel}</Badge>
+        </div>
+        {!readOnly ? (
+          <div className="mt-2.5 flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              disabled={busy || decided}
+              onClick={() => void decide("accept")}
+              className="active:scale-[0.97]"
+            >
+              {t.agents.sectionAccept}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy || decided}
+              onClick={() => void decide("reject")}
+              className="active:scale-[0.97]"
+            >
+              {t.agents.sectionReject}
+            </Button>
+            {error ? <p className="text-destructive text-xs">{error}</p> : null}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
 
   return (
-    <div className="border-border bg-muted/30 my-2 overflow-hidden rounded-xl border">
+    <div className="border-border bg-background overflow-hidden rounded-xl border">
       <div className="border-border flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
         <div className="min-w-0">
           <p className="truncate text-sm font-medium" dir="auto">
             {proposal.headingText || proposal.sectionId}
           </p>
-          <p className="text-muted-foreground text-xs">
+          <p className="text-muted-foreground text-xs tabular-nums">
             {t.agents.sectionLinesChanged(linesChanged)}
           </p>
         </div>
-        <Badge variant="secondary">
-          {status === "proposed"
-            ? t.agents.sectionStatusProposed
-            : status === "accepted"
-              ? t.agents.sectionStatusAccepted
-              : status === "rejected"
-                ? t.agents.sectionStatusRejected
-                : t.agents.sectionStatusSuperseded}
-        </Badge>
+        <Badge variant={status === "proposed" ? "warning" : "secondary"}>{statusLabel}</Badge>
       </div>
 
-      <div className="grid gap-0 sm:grid-cols-2">
-        <div className="border-border border-b p-3 sm:border-e sm:border-b-0">
-          <p className="text-muted-foreground mb-2 text-[0.65rem] font-medium tracking-wide uppercase">
+      <div className="grid gap-0 lg:grid-cols-2">
+        <div className="border-border bg-muted/20 border-b p-4 lg:border-e lg:border-b-0">
+          <p className="text-muted-foreground mb-3 text-[0.65rem] font-medium tracking-[0.06em] uppercase">
             {t.agents.sectionBefore}
           </p>
-          <div className="prose-wiki text-muted-foreground opacity-80">
+          <div className="opacity-75">
             <WikiContent html={proposal.baseHtml} />
           </div>
         </div>
-        <div className="border-primary/30 bg-primary/5 p-3">
-          <p className="text-muted-foreground mb-2 text-[0.65rem] font-medium tracking-wide uppercase">
+        <div className="bg-primary/[0.04] p-4">
+          <p className="text-muted-foreground mb-3 text-[0.65rem] font-medium tracking-[0.06em] uppercase">
             {t.agents.sectionAfter}
           </p>
-          <div className="prose-wiki">
-            <WikiContent html={proposal.proposedHtml} />
-          </div>
+          <WikiContent html={proposal.proposedHtml} />
         </div>
       </div>
 
@@ -178,5 +213,8 @@ export function extractSectionEditProposals(parts: unknown[]): SectionEditPropos
 }
 
 function stripTags(html: string): string {
-  return html.replace(/<[^>]+>/g, "").replace(/\s+/g, "\n").trim();
+  return html
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s+/g, "\n")
+    .trim();
 }

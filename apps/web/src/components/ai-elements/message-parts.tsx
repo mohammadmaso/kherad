@@ -26,13 +26,17 @@ export function MessageParts({
   const skip = new Set(skipToolNames);
 
   return (
-    <>
+    <div className="flex flex-col gap-2.5">
       {parts.map((part, i) => {
         const key = `${messageId}-${i}`;
 
         if (part.type === "text") {
           if (!part.text.trim()) return null;
-          return <Response key={key}>{part.text}</Response>;
+          return (
+            <Response key={key} className="text-[0.9375rem] leading-relaxed tracking-[-0.01em]">
+              {part.text}
+            </Response>
+          );
         }
 
         if (isReasoningUIPart(part)) {
@@ -54,7 +58,7 @@ export function MessageParts({
 
         return null;
       })}
-    </>
+    </div>
   );
 }
 
