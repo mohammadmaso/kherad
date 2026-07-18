@@ -56,6 +56,8 @@ services:
       # Docker API share one bare repo. A named volume here caused silent
       # split-brain: uploads/merges landed in Docker while wiki/assets read
       # apps/api/data/git-repo on the host.
+      # On Linux servers this path is often root-owned (Docker creates it if
+      # missing); the api entrypoint chowns it to uid 1001 before start.
       - ./apps/api/data/git-repo:/data/git-repo
     depends_on:
       postgres:

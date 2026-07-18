@@ -21,18 +21,19 @@ RUN pnpm turbo build --filter=api...
 
 FROM base AS runner
 WORKDIR /app
-RUN addgroup --system --gid 1001 nodejs \
+RUN apk add --no-cache su-exec \
+  && addgroup --system --gid 1001 nodejs \
   && adduser --system --uid 1001 fastify
 
 COPY --from=installer /app .
+COPY apps/api/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh \
+  && mkdir -p /data/git-repo \
+  && chown -R fastify:nodejs /data/git-repo
 
-# Named volumes are created root-owned on first mount; pre-create the git
-# repo dir here and hand it to the runtime user so it can write to it once
-# /data/git-repo is mounted over this path.
-RUN mkdir -p /data/git-repo && chown -R fastify:nodejs /data/git-repo
-
-USER fastify
-
+# Start as root so the entrypoint can chown the bind-mounted/named-volume
+# gitdir (root-owned on Linux servers), then drop to fastify via su-exec.
+ENTRYPOINT ["/docker-entrypoint.sh"]
 ENV NODE_ENV=production
 EXPOSE 4000
 CMD ["node", "apps/api/dist/index.js"]
