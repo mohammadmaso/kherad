@@ -1,3 +1,4 @@
+import type { GitEngine } from "@kherad/core/git";
 import { checkPermission } from "@kherad/core/permissions";
 import { schema, type Database } from "@kherad/db";
 import { and, eq, isNull } from "drizzle-orm";
@@ -17,7 +18,7 @@ const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 // access decision still goes through `checkPermission`.
 const ROLE_RANK: Record<PermissionRole, number> = { viewer: 1, author: 2, manager: 3 };
 
-export async function bundleRoutes(server: FastifyInstance, db: Database) {
+export async function bundleRoutes(server: FastifyInstance, db: Database, git: GitEngine) {
   // Admin-only listing (incl. archived bundles) for the admin panel's bundle table.
   server.get("/bundles", { preHandler: requireAdmin() }, async () => {
     return db.query.bundles.findMany({ orderBy: (b, { asc }) => asc(b.slug) });
@@ -164,6 +165,40 @@ export async function bundleRoutes(server: FastifyInstance, db: Database) {
         .returning();
 
       return updated;
+    },
+  );
+
+  // Hard-delete: admin-only (`manage`), and the body must echo the slug so a
+  // mis-click can't wipe a bundle. Cascades clear Postgres children; git trees
+  // and version branches are purged explicitly.
+  server.delete<{ Params: { bundleId: string }; Body: { confirmSlug?: string } }>(
+    "/bundles/:bundleId",
+    async (request, reply) => {
+      const bundle = await getBundleOrNull(db, request.params.bundleId);
+      if (!bundle) {
+        return reply.code(404).send({ error: "Bundle not found" });
+      }
+
+      const allowed = await checkPermission(db, request.user, bundle, null, "manage");
+      if (!allowed) {
+        return reply.code(403).send({ error: "Forbidden" });
+      }
+
+      const confirmSlug = request.body?.confirmSlug;
+      if (typeof confirmSlug !== "string" || confirmSlug !== bundle.slug) {
+        return reply.code(400).send({
+          error: "confirmSlug must match the bundle slug exactly",
+        });
+      }
+
+      const user = request.user!;
+      await git.purgeBundle(bundle.slug, bundle.defaultBranch, {
+        name: user.displayName,
+        email: user.email,
+      });
+
+      await db.delete(schema.bundles).where(eq(schema.bundles.id, bundle.id));
+      return { deleted: true };
     },
   );
 

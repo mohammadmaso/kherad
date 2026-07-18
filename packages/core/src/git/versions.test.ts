@@ -41,6 +41,27 @@ describe("bundle wiki versions", () => {
     expect(isValidVersionName("bad.lock")).toBe(false);
   });
 
+  it("purgeBundle removes content trees and version branches for one slug", async () => {
+    await engine.writeAndCommit(
+      DEFAULT_BRANCH,
+      [
+        { path: "raw/eng/a.md", content: "eng" },
+        { path: "okf/eng/index.md", content: "okf" },
+        { path: "raw/hr/handbook.md", content: "hr" },
+      ],
+      "seed",
+      AUTHOR,
+    );
+    await engine.createBundleWikiVersion("eng", "v1", AUTHOR);
+
+    await engine.purgeBundle("eng", DEFAULT_BRANCH, AUTHOR);
+
+    expect(await readText(engine, "raw/eng/a.md")).toBeNull();
+    expect(await readText(engine, "okf/eng/index.md")).toBeNull();
+    expect(await readText(engine, "raw/hr/handbook.md")).toBe("hr");
+    expect(await engine.listBundleWikiVersions("eng")).toEqual([]);
+  });
+
   it("creates, lists, restores, and deletes a version", async () => {
     await engine.writeAndCommit(
       DEFAULT_BRANCH,

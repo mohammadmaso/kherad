@@ -76,7 +76,7 @@ await aiSettingsRoutes(server, db);
 await ocrSettingsRoutes(server, db);
 await sttSettingsRoutes(server, db);
 await embeddingSettingsRoutes(server, db, git);
-await bundleRoutes(server, db);
+await bundleRoutes(server, db, git);
 await bundleRemoteRoutes(server, db, git);
 await documentRemoteRoutes(server, db, git);
 await wikiVersionRoutes(server, db, git);

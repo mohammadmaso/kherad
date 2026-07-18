@@ -36,6 +36,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   archiveBundle,
   createBundle,
+  deleteBundle,
   fetchBundles,
   setBundleMode,
   unarchiveBundle,
@@ -66,6 +67,10 @@ export default function AdminBundlesPage() {
   const [editIsPublic, setEditIsPublic] = useState(false);
   const [editMode, setEditMode] = useState<BundleMode>("raw");
   const [editSubmitting, setEditSubmitting] = useState(false);
+
+  const [deletingBundle, setDeletingBundle] = useState<AdminBundle | null>(null);
+  const [deleteConfirmSlug, setDeleteConfirmSlug] = useState("");
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false);
 
   const load = useCallback(() => {
     return fetchBundles().then(setBundles);
@@ -129,6 +134,27 @@ export default function AdminBundlesPage() {
     setEditTitle(bundle.title);
     setEditIsPublic(bundle.isPublic);
     setEditMode(bundle.mode);
+  }
+
+  function openDelete(bundle: AdminBundle) {
+    setDeletingBundle(bundle);
+    setDeleteConfirmSlug("");
+  }
+
+  async function handleDelete() {
+    if (!deletingBundle) return;
+    setDeleteSubmitting(true);
+    setError(null);
+    try {
+      await deleteBundle(deletingBundle.id, deleteConfirmSlug);
+      setDeletingBundle(null);
+      setDeleteConfirmSlug("");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t.admin.deleteBundleFailed);
+    } finally {
+      setDeleteSubmitting(false);
+    }
   }
 
   async function handleEditSave() {
@@ -307,6 +333,12 @@ export default function AdminBundlesPage() {
                             {t.admin.archive}
                           </DropdownMenuItem>
                         )}
+                        <DropdownMenuItem
+                          variant="destructive"
+                          onClick={() => openDelete(bundle)}
+                        >
+                          {t.admin.deleteBundle}
+                        </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
@@ -365,6 +397,62 @@ export default function AdminBundlesPage() {
             </Button>
             <Button disabled={editSubmitting || !editTitle.trim()} onClick={handleEditSave}>
               {t.common.save}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={deletingBundle !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeletingBundle(null);
+            setDeleteConfirmSlug("");
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t.admin.deleteBundleTitle}</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            <p className="text-muted-foreground text-sm">{t.admin.deleteBundleDesc}</p>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="delete-confirm-slug">
+                {deletingBundle
+                  ? t.admin.deleteBundleConfirmLabel(deletingBundle.slug)
+                  : t.admin.slug}
+              </Label>
+              <Input
+                id="delete-confirm-slug"
+                value={deleteConfirmSlug}
+                onChange={(e) => setDeleteConfirmSlug(e.target.value)}
+                placeholder={t.admin.deleteBundleConfirmPlaceholder}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setDeletingBundle(null);
+                setDeleteConfirmSlug("");
+              }}
+            >
+              {t.common.cancel}
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={
+                deleteSubmitting ||
+                !deletingBundle ||
+                deleteConfirmSlug !== deletingBundle.slug
+              }
+              onClick={() => void handleDelete()}
+            >
+              {t.admin.deleteBundle}
             </Button>
           </DialogFooter>
         </DialogContent>

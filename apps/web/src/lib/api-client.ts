@@ -489,6 +489,17 @@ export function unarchiveBundle(bundleId: string): Promise<AdminBundle> {
   return request(`${API_URL}/bundles/${bundleId}/unarchive`, { method: "POST" });
 }
 
+/** Admin-only. Requires typing the bundle slug as `confirmSlug`. */
+export function deleteBundle(
+  bundleId: string,
+  confirmSlug: string,
+): Promise<{ deleted: true }> {
+  return request(`${API_URL}/bundles/${bundleId}`, {
+    method: "DELETE",
+    body: JSON.stringify({ confirmSlug }),
+  });
+}
+
 export function updateBundle(
   bundleId: string,
   input: { title?: string; isPublic?: boolean },

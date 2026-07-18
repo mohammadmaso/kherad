@@ -8,6 +8,7 @@ import { createUserBranch, ensureBranchOff, getRefOid, listBranches } from "./re
 import { initRepo, SYSTEM_AUTHOR } from "./repo";
 import { getSourcePageAtRef, getLatestSourcePageAtRef } from "./source";
 import { bundleGitPathPrefix, DOCUMENTS_GIT_PATH_PREFIX, legacyBundleGitPathPrefix } from "./paths";
+import { purgeBundleContent } from "./purge-bundle";
 import { buildSubtreeMirror, bundleMirrorRefName, documentMirrorRefName } from "./subtree";
 import {
   createBundleWikiVersion,
@@ -179,6 +180,11 @@ export type GitEngine = {
   ): Promise<RestoreVersionResult>;
   /** Write. Serialized via the repo write lock. Deletes the bundle's version branch. */
   deleteBundleWikiVersion(bundleSlug: string, name: string): Promise<void>;
+  /**
+   * Write. Serialized via the repo write lock. Deletes this bundle's content
+   * trees on `branch` and every `version/<bundleSlug>/*` snapshot.
+   */
+  purgeBundle(bundleSlug: string, branch: string, author: CommitAuthor): Promise<void>;
 };
 
 export function createGitEngine(gitdir: string): GitEngine {
@@ -315,5 +321,8 @@ export function createGitEngine(gitdir: string): GitEngine {
 
     deleteBundleWikiVersion: (bundleSlug, name) =>
       withWriteLock(() => deleteBundleWikiVersion(gitdir, bundleSlug, name)),
+
+    purgeBundle: (bundleSlug, branch, author) =>
+      withWriteLock(() => purgeBundleContent(gitdir, bundleSlug, branch, author)),
   };
 }
