@@ -50,7 +50,7 @@ services:
       WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
       API_PUBLIC_URL: ${API_PUBLIC_URL:-http://localhost:4000}
     ports:
-      - "4000:4000"
+      - "4001:4000"
     volumes:
       # Bind-mount so a locally-run web app (`pnpm --filter web dev`) and the
       # Docker API share one bare repo. A named volume here caused silent
@@ -82,7 +82,7 @@ services:
       GIT_REPO_PATH: /data/git-repo
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
     ports:
-      - "3000:3000"
+      - "3001:3000"
     volumes:
       - ./apps/api/data/git-repo:/data/git-repo
     depends_on:
