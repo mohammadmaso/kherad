@@ -12,6 +12,7 @@ import {
   CheckIcon,
   FileTextIcon,
   Loader2Icon,
+  MicIcon,
   ScanTextIcon,
   UploadIcon,
 } from "lucide-react";
@@ -20,6 +21,9 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 
 import { Editor } from "@/components/editor/editor";
+import { AudioWaveformPlayer } from "@/components/ingest/audio-waveform-player";
+import { FilePreview } from "@/components/ingest/file-preview";
+import { VoiceRecorder } from "@/components/ingest/voice-recorder";
 import {
   commitIngestDocument,
   convertIngestDocument,
@@ -38,6 +42,7 @@ import { useI18n } from "@/lib/i18n/provider";
 type Step = "upload" | "edit" | "place";
 type SourceKind = "document" | "voice";
 type ConvertMode = "library" | "ocr";
+type VoiceInputMode = "record" | "upload";
 
 const DOCUMENT_ACCEPT =
   ".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.html,.htm,.md,.txt,.png,.jpg,.jpeg,.webp,.gif,.bmp";
@@ -57,7 +62,11 @@ function StepPill({
   return (
     <li
       className={`flex items-center gap-2 text-sm transition-colors duration-200 ease-[var(--ease-out-spring)] ${
-        active ? "text-foreground font-medium" : done ? "text-foreground/70" : "text-muted-foreground"
+        active
+          ? "text-foreground font-medium"
+          : done
+            ? "text-foreground/70"
+            : "text-muted-foreground"
       }`}
       aria-current={active ? "step" : undefined}
     >
@@ -134,6 +143,7 @@ export function IngestWizard({
   const [ocrConfigured, setOcrConfigured] = useState(false);
   const [sttConfigured, setSttConfigured] = useState(false);
   const [sourceKind, setSourceKind] = useState<SourceKind>("document");
+  const [voiceInputMode, setVoiceInputMode] = useState<VoiceInputMode>("record");
   const [mode, setMode] = useState<ConvertMode>("library");
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -143,6 +153,7 @@ export function IngestWizard({
   const [markdown, setMarkdown] = useState("");
   const [pageImages, setPageImages] = useState<IngestPageImage[]>([]);
   const [audioObjectUrl, setAudioObjectUrl] = useState<string | null>(null);
+  const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [filename, setFilename] = useState("");
   const [format, setFormat] = useState("");
   const [titleHint, setTitleHint] = useState("");
@@ -241,6 +252,7 @@ export function IngestWizard({
         const result = await transcribeIngestAudio(bundleId, file);
         if (audioObjectUrl) URL.revokeObjectURL(audioObjectUrl);
         setAudioObjectUrl(URL.createObjectURL(file));
+        setSourceFile(null);
         setJobId(result.jobId);
         setPageImages([]);
         setFilename(result.filename);
@@ -261,6 +273,7 @@ export function IngestWizard({
       }
 
       const result = await convertIngestDocument(bundleId, file);
+      setSourceFile(file);
       setJobId(result.jobId);
       setPageImages(result.pageImages);
       setFilename(result.filename);
@@ -399,12 +412,7 @@ export function IngestWizard({
             done={stepIndex > 1}
           />
           <span className="bg-border h-px w-6 sm:w-10" aria-hidden />
-          <StepPill
-            index={3}
-            label={t.ingest.stepPlace}
-            active={step === "place"}
-            done={false}
-          />
+          <StepPill index={3} label={t.ingest.stepPlace} active={step === "place"} done={false} />
         </ol>
       </div>
 
@@ -453,9 +461,7 @@ export function IngestWizard({
               onSelect={() => setSourceKind("voice")}
               icon={<AudioLinesIcon className="size-4" />}
               title={t.ingest.sourceVoice}
-              description={
-                sttConfigured ? t.ingest.sourceVoiceDesc : t.ingest.sttUnavailable
-              }
+              description={sttConfigured ? t.ingest.sourceVoiceDesc : t.ingest.sttUnavailable}
             />
           </div>
 
@@ -479,80 +485,114 @@ export function IngestWizard({
             </div>
           ) : null}
 
-          <div
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                if (!busy && bundleId) fileInputRef.current?.click();
-              }
-            }}
-            onClick={() => {
-              if (!busy && bundleId) fileInputRef.current?.click();
-            }}
-            onDragEnter={(e) => {
-              e.preventDefault();
-              setDragging(true);
-            }}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragging(true);
-            }}
-            onDragLeave={(e) => {
-              e.preventDefault();
-              setDragging(false);
-            }}
-            onDrop={onDrop}
-            className={`relative flex min-h-[14rem] cursor-pointer flex-col items-center justify-center gap-3 rounded-3xl border-2 border-dashed px-6 py-10 text-center transition-[border-color,background-color,transform] duration-200 ease-[var(--ease-out-spring)] ${
-              dragging
-                ? "border-primary bg-primary/5 scale-[1.01]"
-                : "border-border hover:border-foreground/25 hover:bg-muted/30"
-            } ${!bundleId || busy ? "pointer-events-none opacity-60" : ""}`}
-          >
-            <span
-              className={`flex size-12 items-center justify-center rounded-2xl transition-transform duration-200 ease-[var(--ease-out-spring)] ${
-                dragging ? "bg-primary/15 text-primary scale-110" : "bg-muted text-muted-foreground"
-              }`}
-            >
-              {busy ? (
-                <Loader2Icon className="size-5 animate-spin" />
-              ) : sourceKind === "voice" ? (
-                <AudioLinesIcon className="size-5" />
-              ) : (
-                <UploadIcon className="size-5" />
-              )}
-            </span>
-            <div className="flex flex-col gap-1">
-              <p className="text-sm font-medium">
-                {busy
-                  ? busyLabel
-                  : sourceKind === "voice"
-                    ? t.ingest.dropVoice
-                    : t.ingest.dropDocument}
-              </p>
-              {!busy ? (
-                <p className="text-muted-foreground text-xs">{t.ingest.orBrowse}</p>
-              ) : null}
+          {sourceKind === "voice" && sttConfigured ? (
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant={voiceInputMode === "record" ? "default" : "outline"}
+                disabled={busy || !bundleId}
+                onClick={() => setVoiceInputMode("record")}
+              >
+                <MicIcon />
+                {t.ingest.voiceInputRecord}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={voiceInputMode === "upload" ? "default" : "outline"}
+                disabled={busy}
+                onClick={() => setVoiceInputMode("upload")}
+              >
+                <UploadIcon />
+                {t.ingest.voiceInputUpload}
+              </Button>
             </div>
-            <p className="text-muted-foreground max-w-sm text-xs leading-relaxed">
-              {sourceKind === "voice" ? t.ingest.voiceTypes : t.ingest.documentTypes}
-            </p>
-            {!bundleId ? (
-              <p className="text-muted-foreground text-xs">{t.ingest.selectBundleFirst}</p>
-            ) : null}
-            <input
-              ref={fileInputRef}
-              type="file"
-              className="sr-only"
-              accept={sourceKind === "voice" ? VOICE_ACCEPT : DOCUMENT_ACCEPT}
+          ) : null}
+
+          {sourceKind === "voice" && sttConfigured && voiceInputMode === "record" ? (
+            <VoiceRecorder
               disabled={busy || !bundleId}
-              onChange={(e) => {
-                const file = e.target.files?.[0] ?? null;
-                void handleFile(file);
-              }}
+              onUseRecording={(file) => void handleFile(file)}
             />
-          </div>
+          ) : (
+            <div
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  if (!busy && bundleId) fileInputRef.current?.click();
+                }
+              }}
+              onClick={() => {
+                if (!busy && bundleId) fileInputRef.current?.click();
+              }}
+              onDragEnter={(e) => {
+                e.preventDefault();
+                setDragging(true);
+              }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragging(true);
+              }}
+              onDragLeave={(e) => {
+                e.preventDefault();
+                setDragging(false);
+              }}
+              onDrop={onDrop}
+              className={`relative flex min-h-[14rem] cursor-pointer flex-col items-center justify-center gap-3 rounded-3xl border-2 border-dashed px-6 py-10 text-center transition-[border-color,background-color,transform] duration-200 ease-[var(--ease-out-spring)] ${
+                dragging
+                  ? "border-primary bg-primary/5 scale-[1.01]"
+                  : "border-border hover:border-foreground/25 hover:bg-muted/30"
+              } ${!bundleId || busy ? "pointer-events-none opacity-60" : ""}`}
+            >
+              <span
+                className={`flex size-12 items-center justify-center rounded-2xl transition-transform duration-200 ease-[var(--ease-out-spring)] ${
+                  dragging
+                    ? "bg-primary/15 text-primary scale-110"
+                    : "bg-muted text-muted-foreground"
+                }`}
+              >
+                {busy ? (
+                  <Loader2Icon className="size-5 animate-spin" />
+                ) : sourceKind === "voice" ? (
+                  <AudioLinesIcon className="size-5" />
+                ) : (
+                  <UploadIcon className="size-5" />
+                )}
+              </span>
+              <div className="flex flex-col gap-1">
+                <p className="text-sm font-medium">
+                  {busy
+                    ? busyLabel
+                    : sourceKind === "voice"
+                      ? t.ingest.dropVoice
+                      : t.ingest.dropDocument}
+                </p>
+                {!busy ? (
+                  <p className="text-muted-foreground text-xs">{t.ingest.orBrowse}</p>
+                ) : null}
+              </div>
+              <p className="text-muted-foreground max-w-sm text-xs leading-relaxed">
+                {sourceKind === "voice" ? t.ingest.voiceTypes : t.ingest.documentTypes}
+              </p>
+              {!bundleId ? (
+                <p className="text-muted-foreground text-xs">{t.ingest.selectBundleFirst}</p>
+              ) : null}
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="sr-only"
+                accept={sourceKind === "voice" ? VOICE_ACCEPT : DOCUMENT_ACCEPT}
+                disabled={busy || !bundleId}
+                onChange={(e) => {
+                  const file = e.target.files?.[0] ?? null;
+                  void handleFile(file);
+                }}
+              />
+            </div>
+          )}
         </div>
       ) : null}
 
@@ -560,8 +600,7 @@ export function IngestWizard({
         <div className="flex flex-col gap-4">
           <div className="text-muted-foreground flex flex-wrap gap-4 text-xs">
             <span>
-              {t.ingest.filename}:{" "}
-              <span className="text-foreground font-mono">{filename}</span>
+              {t.ingest.filename}: <span className="text-foreground font-mono">{filename}</span>
             </span>
             <span>
               {t.ingest.format}: <span className="text-foreground font-mono">{format}</span>
@@ -578,14 +617,12 @@ export function IngestWizard({
                     <span className="bg-primary/10 text-primary flex size-14 items-center justify-center rounded-2xl">
                       <AudioLinesIcon className="size-6" />
                     </span>
-                    <audio controls src={audioObjectUrl} className="w-full max-w-md" />
+                    <AudioWaveformPlayer src={audioObjectUrl} />
                     <p className="text-muted-foreground text-center text-xs" dir="auto">
                       {filename}
                     </p>
                   </div>
-                ) : pagePreviewUrls.length === 0 ? (
-                  <p className="text-muted-foreground text-sm">{t.ingest.noPagePreview}</p>
-                ) : (
+                ) : pagePreviewUrls.length > 0 ? (
                   <div className="flex flex-col gap-4">
                     {pagePreviewUrls.map((page) => (
                       <figure key={page.page} className="flex flex-col gap-1">
@@ -601,6 +638,10 @@ export function IngestWizard({
                       </figure>
                     ))}
                   </div>
+                ) : sourceFile ? (
+                  <FilePreview file={sourceFile} filename={filename} format={format} />
+                ) : (
+                  <p className="text-muted-foreground text-sm">{t.ingest.noPagePreview}</p>
                 )}
               </div>
             </div>
@@ -649,8 +690,7 @@ export function IngestWizard({
             />
             {suggestedPath ? (
               <p className="text-muted-foreground text-xs">
-                {t.bundles.pathHintPrefix}{" "}
-                <span className="font-mono">/{suggestedPath}</span>
+                {t.bundles.pathHintPrefix} <span className="font-mono">/{suggestedPath}</span>
               </p>
             ) : null}
           </div>
