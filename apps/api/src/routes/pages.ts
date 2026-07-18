@@ -6,7 +6,7 @@ import {
 } from "@kherad/core/git";
 import { checkPermission } from "@kherad/core/permissions";
 import { schema, type Database } from "@kherad/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, like, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 
 import { getBundleOrNull, isUuid } from "../lib/get-bundle";
@@ -268,48 +268,129 @@ export async function pageRoutes(server: FastifyInstance, db: Database, git: Git
     return updated;
   });
 
-  server.delete<{ Params: { bundleId: string; pageId: string } }>(
-    "/bundles/:bundleId/pages/:pageId",
-    async (request, reply) => {
-      const bundle = await getBundleOrNull(db, request.params.bundleId);
-      if (!bundle) {
-        return reply.code(404).send({ error: "Bundle not found" });
-      }
+  server.delete<{
+    Params: { bundleId: string; pageId: string };
+    Body: { confirmName?: string };
+  }>("/bundles/:bundleId/pages/:pageId", async (request, reply) => {
+    const bundle = await getBundleOrNull(db, request.params.bundleId);
+    if (!bundle) {
+      return reply.code(404).send({ error: "Bundle not found" });
+    }
 
-      const page = await getRawPageOrNull(bundle.id, request.params.pageId);
-      if (!page || page.isDeleted) {
-        return reply.code(404).send({ error: "Page not found" });
-      }
+    const page = await getRawPageOrNull(bundle.id, request.params.pageId);
+    if (!page || page.isDeleted) {
+      return reply.code(404).send({ error: "Page not found" });
+    }
 
-      const allowed = await checkPermission(db, request.user, bundle, page.path, "edit");
-      if (!allowed) {
-        return reply.code(403).send({ error: "Forbidden" });
-      }
-      const user = request.user!;
+    const confirmName = request.body?.confirmName;
+    if (typeof confirmName !== "string" || confirmName !== page.title) {
+      return reply.code(400).send({
+        error: "confirmName must match the document title exactly",
+      });
+    }
 
-      // Also remove the file from the author's branch (mirroring rename's
-      // delete-old-path commit) so the deletion reaches main via the normal
-      // MR flow. Leaving the blob in git kept deleted content alive in OKF
-      // compiles and remote mirrors, and `reconcileRawPagesFromGit` (remote
-      // pull / version restore) would resurrect the soft-deleted row.
-      const branch = await git.createUserBranch(user.id);
-      await git.writeAndCommit(
-        branch,
-        [
-          { path: pageGitPath(bundle.slug, page.path), content: null },
-          { path: legacyPageGitPath(bundle.slug, page.path), content: null },
-        ],
-        `Delete page: ${page.path}`,
-        { name: user.displayName, email: user.email },
-      );
+    const allowed = await checkPermission(db, request.user, bundle, page.path, "edit");
+    if (!allowed) {
+      return reply.code(403).send({ error: "Forbidden" });
+    }
+    const user = request.user!;
 
-      const [updated] = await db
-        .update(schema.pages)
-        .set({ isDeleted: true })
-        .where(eq(schema.pages.id, page.id))
-        .returning();
+    // Also remove the file from the author's branch (mirroring rename's
+    // delete-old-path commit) so the deletion reaches main via the normal
+    // MR flow. Leaving the blob in git kept deleted content alive in OKF
+    // compiles and remote mirrors, and `reconcileRawPagesFromGit` (remote
+    // pull / version restore) would resurrect the soft-deleted row.
+    const branch = await git.createUserBranch(user.id);
+    await git.writeAndCommit(
+      branch,
+      [
+        { path: pageGitPath(bundle.slug, page.path), content: null },
+        { path: legacyPageGitPath(bundle.slug, page.path), content: null },
+      ],
+      `Delete page: ${page.path}`,
+      { name: user.displayName, email: user.email },
+    );
 
-      return updated;
-    },
-  );
+    const [updated] = await db
+      .update(schema.pages)
+      .set({ isDeleted: true })
+      .where(eq(schema.pages.id, page.id))
+      .returning();
+
+    return updated;
+  });
+
+  // Soft-delete every raw page at/under a path prefix (folders are not
+  // first-class — they're derived from page paths). Requires typing the
+  // folder's last path segment as confirmName.
+  server.delete<{
+    Params: { bundleId: string };
+    Body: { pathPrefix?: string; confirmName?: string };
+  }>("/bundles/:bundleId/folders", async (request, reply) => {
+    const bundle = await getBundleOrNull(db, request.params.bundleId);
+    if (!bundle) {
+      return reply.code(404).send({ error: "Bundle not found" });
+    }
+
+    const rawPrefix = request.body?.pathPrefix;
+    if (typeof rawPrefix !== "string") {
+      return reply.code(400).send({ error: "pathPrefix is required" });
+    }
+    const pathPrefix = normalizePagePath(rawPrefix);
+    if (pathPrefix === null) {
+      return reply.code(400).send({ error: "Invalid pathPrefix" });
+    }
+
+    const folderName = pathPrefix.includes("/")
+      ? pathPrefix.slice(pathPrefix.lastIndexOf("/") + 1)
+      : pathPrefix;
+    const confirmName = request.body?.confirmName;
+    if (typeof confirmName !== "string" || confirmName !== folderName) {
+      return reply.code(400).send({
+        error: "confirmName must match the folder name exactly",
+      });
+    }
+
+    const pages = await db.query.pages.findMany({
+      where: and(
+        eq(schema.pages.bundleId, bundle.id),
+        eq(schema.pages.source, "raw"),
+        eq(schema.pages.isDeleted, false),
+        or(eq(schema.pages.path, pathPrefix), like(schema.pages.path, `${pathPrefix}/%`)),
+      ),
+    });
+    if (pages.length === 0) {
+      return reply.code(404).send({ error: "Folder not found" });
+    }
+
+    const permissions = await Promise.all(
+      pages.map((page) => checkPermission(db, request.user, bundle, page.path, "edit")),
+    );
+    if (permissions.some((allowed) => !allowed)) {
+      return reply.code(403).send({ error: "Forbidden" });
+    }
+    const user = request.user!;
+
+    const branch = await git.createUserBranch(user.id);
+    const files = pages.flatMap((page) => [
+      { path: pageGitPath(bundle.slug, page.path), content: null as string | null },
+      { path: legacyPageGitPath(bundle.slug, page.path), content: null as string | null },
+    ]);
+    await git.writeAndCommit(
+      branch,
+      files,
+      `Delete folder: ${pathPrefix} (${pages.length} page${pages.length === 1 ? "" : "s"})`,
+      { name: user.displayName, email: user.email },
+    );
+
+    await db
+      .update(schema.pages)
+      .set({ isDeleted: true })
+      .where(inArray(
+        schema.pages.id,
+        pages.map((page) => page.id),
+      ));
+
+    return { deleted: true, count: pages.length, pathPrefix };
+  });
 }

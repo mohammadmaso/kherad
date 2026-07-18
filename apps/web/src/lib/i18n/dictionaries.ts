@@ -474,6 +474,18 @@ const en = {
     sourceDocuments: "Source documents",
     emptySources: "No source documents yet. Create the first one, then compile the knowledge base.",
     emptyDocuments: "No documents yet. Create the first one.",
+    deleteDocument: "Delete document",
+    deleteFolder: "Delete folder",
+    deleteDocumentTitle: "Delete this document permanently?",
+    deleteFolderTitle: "Delete this folder permanently?",
+    deleteDocumentDesc:
+      "This removes the document from your branch. Publish a merge request to apply the deletion on main.",
+    deleteFolderDesc: (count: number) =>
+      `This removes ${count} document${count === 1 ? "" : "s"} in this folder from your branch. Publish a merge request to apply the deletion on main.`,
+    deleteConfirmLabel: (name: string) => `Type ${name} to confirm`,
+    deleteConfirmPlaceholder: "Name",
+    deleteDocumentFailed: "Failed to delete document",
+    deleteFolderFailed: "Failed to delete folder",
   },
   ingest: {
     title: "Ingest",
@@ -1494,6 +1506,18 @@ const fa: Dictionary = {
     sourceDocuments: "اسناد منبع",
     emptySources: "هنوز سند منبعی نیست. اولی را بسازید، سپس پایگاه دانش را تولید کنید.",
     emptyDocuments: "هنوز سندی نیست. اولی را بسازید.",
+    deleteDocument: "حذف سند",
+    deleteFolder: "حذف پوشه",
+    deleteDocumentTitle: "این سند برای همیشه حذف شود؟",
+    deleteFolderTitle: "این پوشه برای همیشه حذف شود؟",
+    deleteDocumentDesc:
+      "سند از شاخهٔ شما حذف می‌شود. برای اعمال حذف روی شاخهٔ اصلی، درخواست ادغام ارسال کنید.",
+    deleteFolderDesc: (count: number) =>
+      `${count} سند در این پوشه از شاخهٔ شما حذف می‌شود. برای اعمال حذف روی شاخهٔ اصلی، درخواست ادغام ارسال کنید.`,
+    deleteConfirmLabel: (name: string) => `برای تأیید ${name} را تایپ کنید`,
+    deleteConfirmPlaceholder: "نام",
+    deleteDocumentFailed: "حذف سند ناموفق بود",
+    deleteFolderFailed: "حذف پوشه ناموفق بود",
   },
   ingest: {
     title: "ورود",

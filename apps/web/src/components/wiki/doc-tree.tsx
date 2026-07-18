@@ -65,8 +65,8 @@ function DocTreeNode({
           </button>
         )}
 
-        {node.page && renderActions ? (
-          <span className="flex shrink-0 items-center opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+        {renderActions ? (
+          <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100">
             {renderActions(node)}
           </span>
         ) : null}
@@ -99,7 +99,7 @@ export function DocTree({
   tree: WikiNavNode[];
   /** Href for a leaf node's primary link. */
   linkFor: (node: WikiNavNode) => string;
-  /** Optional secondary action (e.g. an edit link) shown next to a leaf on hover. */
+  /** Optional secondary actions shown next to a node on hover (pages and folders). */
   renderActions?: (node: WikiNavNode) => ReactNode;
   emptyMessage: string;
 }) {

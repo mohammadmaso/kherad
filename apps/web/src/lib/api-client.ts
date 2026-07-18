@@ -129,6 +129,33 @@ export function fetchBundlePages(bundleId: string): Promise<PageSummary[]> {
   return request(`${API_URL}/bundles/${bundleId}/pages`);
 }
 
+/** Soft-deletes a document. `confirmName` must match the page title exactly. */
+export function deletePage(
+  bundleId: string,
+  pageId: string,
+  confirmName: string,
+): Promise<PageSummary> {
+  return request(`${API_URL}/bundles/${bundleId}/pages/${pageId}`, {
+    method: "DELETE",
+    body: JSON.stringify({ confirmName }),
+  });
+}
+
+/**
+ * Soft-deletes every document at/under `pathPrefix`.
+ * `confirmName` must match the folder's last path segment exactly.
+ */
+export function deleteFolder(
+  bundleId: string,
+  pathPrefix: string,
+  confirmName: string,
+): Promise<{ deleted: true; count: number; pathPrefix: string }> {
+  return request(`${API_URL}/bundles/${bundleId}/folders`, {
+    method: "DELETE",
+    body: JSON.stringify({ pathPrefix, confirmName }),
+  });
+}
+
 export type OkfDocSummary = { path: string; title: string; readonly: boolean };
 
 /** Folder-tree listing of a `llm_compiled` bundle's compiled OKF docs. */
