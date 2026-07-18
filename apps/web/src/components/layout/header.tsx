@@ -13,6 +13,7 @@ import {
   CheckIcon,
   ChevronDownIcon,
   GlobeIcon,
+  InfoIcon,
   LayoutDashboardIcon,
   LogOutIcon,
   SearchIcon,
@@ -20,6 +21,7 @@ import {
   UploadIcon,
   UserCogIcon,
   UserIcon,
+  UsersIcon,
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
@@ -211,6 +213,14 @@ export function Header() {
                   <UserIcon className="text-muted-foreground size-4" />
                   {t.header.profile}
                 </DropdownMenuItem>
+                <DropdownMenuItem render={<Link href="/about" />}>
+                  <InfoIcon className="text-muted-foreground size-4" />
+                  {t.header.aboutApp}
+                </DropdownMenuItem>
+                <DropdownMenuItem render={<Link href="/about/us" />}>
+                  <UsersIcon className="text-muted-foreground size-4" />
+                  {t.header.aboutUs}
+                </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem variant="destructive" onClick={handleSignOut}>
                   <LogOutIcon className="size-4" />
@@ -221,6 +231,12 @@ export function Header() {
           </div>
         ) : (
           <div className="flex items-center gap-2">
+            <Link
+              href="/about"
+              className="text-muted-foreground hover:bg-muted/60 hover:text-foreground rounded-full px-3 py-1.5 text-sm transition-colors duration-150"
+            >
+              {t.header.aboutApp}
+            </Link>
             <LanguageMenu />
             <Button size="sm" nativeButton={false} render={<Link href="/login" />}>
               {t.common.signIn}

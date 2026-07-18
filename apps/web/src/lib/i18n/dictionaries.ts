@@ -48,11 +48,69 @@ const en = {
     admin: "Management",
     search: "Search",
     profile: "Profile & settings",
+    aboutApp: "About the app",
+    aboutUs: "About us",
     openMenu: "Account menu",
     language: "Language",
     notifications: "Notifications",
     noNotifications: "You're all caught up.",
     markAllRead: "Mark all as read",
+  },
+  about: {
+    navLabel: "About sections",
+    tabApp: "About the app",
+    tabUs: "About us",
+    appSubtitle:
+      "An internal, git-backed knowledge base — Notion-like writing for authors, real commits and review under the hood.",
+    buildDetails: "Build details",
+    buildDetailsHint: "Version and source identity for this running instance.",
+    version: "Version",
+    commit: "Commit",
+    buildDate: "Commit date",
+    repository: "Repository",
+    license: "License",
+    copied: "Copied",
+    stack: "Technology",
+    stackHint: "Core pieces that power editing, review, and storage.",
+    whatItIs: "What Kherad is",
+    whatItIsBody:
+      "Kherad is a self-hosted wiki for one organization. Authors edit in a block editor; every explicit save becomes a git commit on a personal branch, and published changes go through merge-request review before they land on the live tree.",
+    highlights: [
+      "Real git history without exposing git vocabulary to writers",
+      "Bundle-scoped permissions, public bundles, and soft presence locks",
+      "AI agents and RAG chat grounded in reviewed wiki content",
+      "Document and voice ingest into editable markdown drafts",
+    ],
+    usKicker: "The people behind the product",
+    usTitle: "About us",
+    usLead:
+      "Kherad is built for teams that treat internal documentation as infrastructure — durable, reviewable, and owned by the organization, not locked inside a vendor's editor.",
+    mission: "Mission",
+    missionBody:
+      "Give non-technical authors a calm, familiar writing experience while keeping the source of truth in a real git repository. Reviewers get a clear approval path; the organization keeps history, portability, and control.",
+    principles: "Principles",
+    principlesList: [
+      {
+        title: "Writers first",
+        body: "Authors should never need to think about branches, diffs, or merge conflicts. Those details belong to the review layer.",
+      },
+      {
+        title: "History is sacred",
+        body: "Every published change is attributable and recoverable. Soft deletes, redirects, and linear history on the live branch keep the archive trustworthy.",
+      },
+      {
+        title: "Permissions with intent",
+        body: "Access is scoped by bundle and path. Public reading is intentional; management remains an admin responsibility.",
+      },
+      {
+        title: "Open by design",
+        body: "The product is open-sourced under Apache 2.0 so organizations can self-host, inspect, and extend it without surrendering their knowledge base.",
+      },
+    ],
+    openSource: "Open source",
+    openSourceBody:
+      "Kherad is developed in the open. Contributions, issues, and deployment feedback belong in the public repository.",
+    viewBuildDetails: "View version & build details",
   },
   agents: {
     title: "Agents",
@@ -853,11 +911,69 @@ const fa: Dictionary = {
     admin: "مدیریت",
     search: "جستجو",
     profile: "پروفایل و تنظیمات",
+    aboutApp: "دربارهٔ برنامه",
+    aboutUs: "دربارهٔ ما",
     openMenu: "منوی حساب کاربری",
     language: "زبان",
     notifications: "اعلان‌ها",
     noNotifications: "اعلان جدیدی ندارید.",
     markAllRead: "علامت‌گذاری همه به‌عنوان خوانده‌شده",
+  },
+  about: {
+    navLabel: "بخش‌های درباره",
+    tabApp: "دربارهٔ برنامه",
+    tabUs: "دربارهٔ ما",
+    appSubtitle:
+      "پایگاه دانش داخلی مبتنی بر گیت — نوشتن شبیه نوت‌بوک برای نویسندگان، با کامیت‌ها و بازبینی واقعی در پشت صحنه.",
+    buildDetails: "جزئیات ساخت",
+    buildDetailsHint: "نسخه و هویت منبع این نمونهٔ در حال اجرا.",
+    version: "نسخه",
+    commit: "کامیت",
+    buildDate: "تاریخ کامیت",
+    repository: "مخزن",
+    license: "پروانه",
+    copied: "کپی شد",
+    stack: "فناوری",
+    stackHint: "اجزای اصلی ویرایش، بازبینی و ذخیره‌سازی.",
+    whatItIs: "خرد چیست",
+    whatItIsBody:
+      "خرد یک ویکی خودمیزبان برای یک سازمان است. نویسندگان در ویرایشگر بلوکی می‌نویسند؛ هر ذخیرهٔ صریح روی شاخهٔ شخصی‌شان کامیت می‌شود و تغییرات منتشرشده پیش از ورود به درخت زنده، از مسیر درخواست ادغام می‌گذرند.",
+    highlights: [
+      "تاریخچهٔ واقعی گیت بدون نمایش واژگان گیت به نویسندگان",
+      "مجوزهای محدود به مجموعه، مجموعه‌های عمومی و قفل حضور نرم",
+      "عامل‌های هوش مصنوعی و گفتگوی مبتنی بر محتوای بازبینی‌شده",
+      "ورود سند و صدا به پیش‌نویس‌های مارک‌داون قابل ویرایش",
+    ],
+    usKicker: "افراد پشت محصول",
+    usTitle: "دربارهٔ ما",
+    usLead:
+      "خرد برای تیم‌هایی ساخته شده که مستندسازی داخلی را زیرساخت می‌دانند — پایدار، قابل بازبینی و متعلق به سازمان؛ نه حبس‌شده در ویرایشگر یک فروشنده.",
+    mission: "مأموریت",
+    missionBody:
+      "تجربهٔ نوشتن آرام و آشنا برای نویسندگان غیرفنی، در حالی که منبع حقیقت یک مخزن واقعی گیت بماند. بازبین‌ها مسیر تأیید روشنی دارند؛ سازمان تاریخچه، قابلیت جابه‌جایی و کنترل را حفظ می‌کند.",
+    principles: "اصول",
+    principlesList: [
+      {
+        title: "اولویت با نویسنده",
+        body: "نویسندگان نباید به شاخه، دیف یا تداخل ادغام فکر کنند. این جزئیات به لایهٔ بازبینی تعلق دارد.",
+      },
+      {
+        title: "تاریخچه مقدس است",
+        body: "هر تغییر منتشرشده قابل انتساب و بازیابی است. حذف نرم، تغییر مسیر و تاریخچهٔ خطی روی شاخهٔ زنده، آرشیو را قابل اعتماد نگه می‌دارد.",
+      },
+      {
+        title: "مجوز با نیت",
+        body: "دسترسی بر اساس مجموعه و مسیر محدود می‌شود. خواندن عمومی عمدی است؛ مدیریت مسئولیت ادمین می‌ماند.",
+      },
+      {
+        title: "باز به‌صورت طراحی",
+        body: "محصول تحت پروانهٔ آپاچی ۲٫۰ متن‌باز است تا سازمان‌ها بتوانند آن را خودمیزبان کنند، بازرسی کنند و گسترش دهند بدون واگذاری پایگاه دانششان.",
+      },
+    ],
+    openSource: "متن‌باز",
+    openSourceBody:
+      "خرد به‌صورت عمومی توسعه می‌یابد. مشارکت‌ها، مسائل و بازخورد استقرار در مخزن عمومی جای دارند.",
+    viewBuildDetails: "مشاهدهٔ نسخه و جزئیات ساخت",
   },
   agents: {
     title: "عامل‌ها",

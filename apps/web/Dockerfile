@@ -17,6 +17,17 @@ RUN pnpm install --frozen-lockfile
 
 COPY --from=builder /app/out/full/ .
 COPY --from=builder /app/tsconfig.base.json .
+
+# Optional build metadata for the About page (pass via docker compose build args).
+ARG APP_VERSION=
+ARG GIT_SHA=
+ARG GIT_COMMIT_DATE=
+ARG GIT_REPO_URL=https://github.com/mohammadmaso/kherad
+ENV NEXT_PUBLIC_APP_VERSION=$APP_VERSION \
+    NEXT_PUBLIC_GIT_SHA=$GIT_SHA \
+    NEXT_PUBLIC_GIT_COMMIT_DATE=$GIT_COMMIT_DATE \
+    NEXT_PUBLIC_GIT_REPO_URL=$GIT_REPO_URL
+
 RUN pnpm turbo build --filter=web...
 
 FROM base AS runner

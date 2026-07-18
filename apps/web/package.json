@@ -28,12 +28,15 @@
     "drizzle-orm": "^0.38.4",
     "lexical": "^0.47.0",
     "lucide-react": "^1.24.0",
+    "mammoth": "^1.12.0",
     "mermaid": "^11.16.0",
     "next": "16.2.10",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "streamdown": "^2.5.0",
-    "use-stick-to-bottom": "^1.1.6"
+    "use-stick-to-bottom": "^1.1.6",
+    "wavesurfer.js": "^7.12.11",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

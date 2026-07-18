@@ -63,6 +63,11 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-0.1.0}
+        GIT_SHA: ${GIT_SHA:-}
+        GIT_COMMIT_DATE: ${GIT_COMMIT_DATE:-}
+        GIT_REPO_URL: ${GIT_REPO_URL:-https://github.com/mohammadmaso/kherad}
     restart: unless-stopped
     environment:
       PORT: 3000
