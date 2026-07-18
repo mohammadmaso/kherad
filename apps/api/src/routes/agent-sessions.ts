@@ -1,7 +1,8 @@
 import { Readable } from "node:stream";
 
 import type { AuthedUser } from "@kherad/core/auth";
-import { resolvePagePath, type GitEngine } from "@kherad/core/git";
+import { resolvePagePath, userBranchName, type GitEngine } from "@kherad/core/git";
+import { assembleDocument, splitIntoSections } from "@kherad/core/markdown";
 import { canAccessAgents, checkPermission } from "@kherad/core/permissions";
 import { schema, type Database } from "@kherad/db";
 import { toAISdkStream } from "@mastra/ai-sdk";
@@ -15,14 +16,22 @@ import {
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 
+import { pageEditInstructions } from "../agents/specialist/page-edit-prompt";
+import {
+  buildSectionEditsStatusContext,
+  buildSessionSectionsView,
+  createPageEditTools,
+  loadAcceptedSectionOverrides,
+} from "../agents/specialist/page-edit-tools";
 import { specialistInstructions, type Aggressiveness } from "../agents/specialist/prompt";
 import { createSpecialistTools } from "../agents/specialist/tools";
 import { loadSessionSkills } from "../agents/skills";
 import { buildPageMentionContext, extractPageMentions } from "../agents/page-mentions";
 import { startIndexerRun } from "../agents/indexer/run";
 import { buildModel, loadAiSettings } from "../agents/settings";
-import { getBundleOrNull } from "../lib/get-bundle";
+import { getBundleOrNull, isUuid } from "../lib/get-bundle";
 import { pageGitPath } from "../lib/wiki-paths";
+import { writePageContent } from "../lib/write-page-content";
 
 const MAX_AGENT_STEPS = 24;
 const MAX_UPLOAD_BYTES = 256 * 1024;
@@ -132,6 +141,7 @@ function toSessionResponse(
     uploadCount?: number;
     bundle?: { id: string; slug: string; title: string; mode: string } | null;
     skills?: Array<{ id: string; name: string }>;
+    sections?: Awaited<ReturnType<typeof buildSessionSectionsView>>;
   },
 ) {
   return {
@@ -143,11 +153,14 @@ function toSessionResponse(
     bundleId: session.bundleId,
     draftMarkdown: session.draftMarkdown,
     status: session.status,
+    mode: session.mode,
+    targetPageId: session.targetPageId,
     createdAt: session.createdAt.toISOString(),
     updatedAt: session.updatedAt.toISOString(),
     uploadCount: extras?.uploadCount ?? 0,
     bundle: extras?.bundle ?? null,
     skills: extras?.skills ?? [],
+    sections: extras?.sections ?? [],
   };
 }
 
@@ -187,10 +200,13 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
       role?: string;
       aggressiveness?: string;
       skillIds?: string[];
+      mode?: "create" | "edit";
+      targetPageId?: string;
     };
   }>("/agents/sessions", async (request, reply) => {
     if (!(await requireAgentAccess(db, request.user, reply))) return;
     const user = request.user!;
+    const mode = request.body?.mode === "edit" ? "edit" : "create";
     const goal = request.body?.goal?.trim() || null;
     const role = request.body?.role?.trim().slice(0, MAX_ROLE_CHARS) || null;
     const aggressiveness = request.body?.aggressiveness
@@ -199,6 +215,78 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
     if (!aggressiveness) {
       return reply.code(400).send({ error: "Invalid aggressiveness" });
     }
+
+    if (mode === "edit") {
+      const targetPageId = request.body?.targetPageId;
+      if (!targetPageId || !isUuid(targetPageId)) {
+        return reply.code(400).send({ error: "targetPageId is required for edit mode" });
+      }
+
+      const page = await db.query.pages.findFirst({
+        where: and(
+          eq(schema.pages.id, targetPageId),
+          eq(schema.pages.source, "raw"),
+          eq(schema.pages.isDeleted, false),
+        ),
+      });
+      if (!page || page.redirectTo) {
+        return reply.code(404).send({ error: "Page not found" });
+      }
+
+      const bundle = await getBundleOrNull(db, page.bundleId);
+      if (!bundle || bundle.archivedAt) {
+        return reply.code(404).send({ error: "Bundle not found" });
+      }
+
+      const canEdit = await checkPermission(db, user, bundle, page.path, "edit");
+      if (!canEdit) {
+        return reply.code(403).send({ error: "Forbidden" });
+      }
+
+      const userBranch = userBranchName(user.id);
+      const branches = await git.listBranches();
+      const readRef = branches.includes(userBranch) ? userBranch : bundle.defaultBranch;
+      const contentBytes = await git.getSourcePageAtRef(readRef, bundle.slug, page.path);
+      if (contentBytes === null) {
+        return reply.code(404).send({ error: "Page content not found" });
+      }
+      const snapshotMarkdown = new TextDecoder().decode(contentBytes);
+
+      const skillIds = await resolveSkillIds(db, request.body?.skillIds);
+      const [session] = await db
+        .insert(schema.agentSessions)
+        .values({
+          userId: user.id,
+          title: page.title.slice(0, 120),
+          goal,
+          role,
+          aggressiveness,
+          bundleId: bundle.id,
+          status: "active",
+          mode: "edit",
+          targetPageId: page.id,
+          targetBranch: readRef,
+          targetSnapshotMarkdown: snapshotMarkdown,
+        })
+        .returning();
+
+      if (!session) {
+        return reply.code(500).send({ error: "Failed to create session" });
+      }
+
+      if (skillIds.length > 0) {
+        await db
+          .insert(schema.agentSessionSkills)
+          .values(skillIds.map((skillId) => ({ sessionId: session.id, skillId })));
+      }
+
+      reply.code(201);
+      return toSessionResponse(session, {
+        uploadCount: 0,
+        bundle: { id: bundle.id, slug: bundle.slug, title: bundle.title, mode: bundle.mode },
+      });
+    }
+
     let bundleId: string | null = request.body?.bundleId ?? null;
 
     if (bundleId) {
@@ -226,6 +314,7 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
         aggressiveness,
         bundleId,
         status: "active",
+        mode: "create",
       })
       .returning();
 
@@ -253,7 +342,7 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
         return reply.code(404).send({ error: "Session not found" });
       }
 
-      const [uploads, messages, bundle, sessionSkills] = await Promise.all([
+      const [uploads, messages, bundle, sessionSkills, sections] = await Promise.all([
         db.query.agentUploads.findMany({
           where: eq(schema.agentUploads.sessionId, session.id),
           columns: {
@@ -274,6 +363,9 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
           where: eq(schema.agentSessionSkills.sessionId, session.id),
           with: { skill: { columns: { id: true, name: true } } },
         }),
+        session.mode === "edit" && session.targetSnapshotMarkdown
+          ? buildSessionSectionsView(db, session.id, session.targetSnapshotMarkdown)
+          : Promise.resolve([]),
       ]);
 
       return {
@@ -285,6 +377,7 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
           skills: sessionSkills
             .map((row) => row.skill)
             .filter((s): s is { id: string; name: string } => s !== null),
+          sections,
         }),
         uploads: uploads.map((u) => ({
           id: u.id,
@@ -528,10 +621,37 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
       mentions: extractPageMentions(messages),
     });
 
-    const agent = new Agent({
-      id: "specialist",
-      name: "Specialist",
-      instructions:
+    const isEdit = session.mode === "edit";
+    const snapshot = isEdit
+      ? splitIntoSections(session.targetSnapshotMarkdown ?? "")
+      : null;
+
+    let instructions: string;
+    let tools: ReturnType<typeof createSpecialistTools> | ReturnType<typeof createPageEditTools>;
+
+    if (isEdit && snapshot) {
+      const statusContext = await buildSectionEditsStatusContext(db, session.id, snapshot);
+      instructions =
+        pageEditInstructions({
+          role: session.role,
+          goal: session.goal,
+          pageTitle: session.title,
+          bundleTitle: bundle?.title ?? null,
+          hasUploads: uploadRows.length > 0,
+          aggressiveness: session.aggressiveness,
+          skills: sessionSkills,
+        }) +
+        statusContext +
+        mentionContext;
+      tools = createPageEditTools({
+        db,
+        git,
+        user,
+        sessionId: session.id,
+        snapshot,
+      });
+    } else {
+      instructions =
         specialistInstructions({
           role: session.role,
           goal: session.goal,
@@ -539,9 +659,16 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
           hasUploads: uploadRows.length > 0,
           aggressiveness: session.aggressiveness,
           skills: sessionSkills,
-        }) + mentionContext,
+        }) + mentionContext;
+      tools = createSpecialistTools({ db, git, user, sessionId: session.id });
+    }
+
+    const agent = new Agent({
+      id: "specialist",
+      name: "Specialist",
+      instructions,
       model: buildModel(settings, "interviewer"),
-      tools: createSpecialistTools({ db, git, user, sessionId: session.id }),
+      tools,
     });
 
     const agentStream = await agent.stream(messages, { maxSteps: MAX_AGENT_STEPS });
@@ -580,6 +707,125 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
       response.body ? Readable.fromWeb(response.body as import("stream/web").ReadableStream) : "",
     );
   });
+
+  server.post<{
+    Params: { sessionId: string; editId: string };
+    Body: { decision: "accept" | "reject" };
+  }>("/agents/sessions/:sessionId/section-edits/:editId/decision", async (request, reply) => {
+    if (!(await requireAgentAccess(db, request.user, reply))) return;
+    const user = request.user!;
+    const session = await loadOwnedSession(db, request.params.sessionId, user.id, user.isAdmin);
+    if (!session) {
+      return reply.code(404).send({ error: "Session not found" });
+    }
+    if (session.mode !== "edit") {
+      return reply.code(400).send({ error: "Session is not in edit mode" });
+    }
+
+    const decision = request.body?.decision;
+    if (decision !== "accept" && decision !== "reject") {
+      return reply.code(400).send({ error: "decision must be accept or reject" });
+    }
+
+    const edit = await db.query.agentSectionEdits.findFirst({
+      where: and(
+        eq(schema.agentSectionEdits.id, request.params.editId),
+        eq(schema.agentSectionEdits.sessionId, session.id),
+      ),
+    });
+    if (!edit) {
+      return reply.code(404).send({ error: "Section edit not found" });
+    }
+    if (edit.status !== "proposed") {
+      return reply.code(400).send({ error: "Edit is not awaiting a decision" });
+    }
+
+    const [updated] = await db
+      .update(schema.agentSectionEdits)
+      .set({
+        status: decision === "accept" ? "accepted" : "rejected",
+        decidedAt: new Date(),
+      })
+      .where(eq(schema.agentSectionEdits.id, edit.id))
+      .returning();
+
+    await db
+      .update(schema.agentSessions)
+      .set({ updatedAt: new Date() })
+      .where(eq(schema.agentSessions.id, session.id));
+
+    return {
+      id: updated!.id,
+      sectionId: updated!.sectionId,
+      status: updated!.status,
+      decidedAt: updated!.decidedAt?.toISOString() ?? null,
+    };
+  });
+
+  server.post<{ Params: { sessionId: string } }>(
+    "/agents/sessions/:sessionId/save",
+    async (request, reply) => {
+      if (!(await requireAgentAccess(db, request.user, reply))) return;
+      const user = request.user!;
+      const session = await loadOwnedSession(db, request.params.sessionId, user.id, user.isAdmin);
+      if (!session) {
+        return reply.code(404).send({ error: "Session not found" });
+      }
+      if (session.mode !== "edit") {
+        return reply.code(400).send({ error: "Session is not in edit mode" });
+      }
+      if (!session.targetPageId || !session.targetSnapshotMarkdown || !session.bundleId) {
+        return reply.code(400).send({ error: "Edit session is missing target page data" });
+      }
+
+      const page = await db.query.pages.findFirst({
+        where: and(
+          eq(schema.pages.id, session.targetPageId),
+          eq(schema.pages.source, "raw"),
+          eq(schema.pages.isDeleted, false),
+        ),
+      });
+      if (!page) {
+        return reply.code(404).send({ error: "Page not found" });
+      }
+
+      const bundle = await getBundleOrNull(db, session.bundleId);
+      if (!bundle || bundle.archivedAt) {
+        return reply.code(404).send({ error: "Bundle not found" });
+      }
+
+      const allowed = await checkPermission(db, user, bundle, page.path, "edit");
+      if (!allowed) {
+        return reply.code(403).send({ error: "Forbidden" });
+      }
+
+      const overrides = await loadAcceptedSectionOverrides(db, session.id);
+      if (overrides.size === 0) {
+        return reply.code(400).send({ error: "No accepted section edits to save" });
+      }
+
+      const content = assembleDocument(
+        splitIntoSections(session.targetSnapshotMarkdown),
+        overrides,
+      );
+
+      const { commitOid, branch } = await writePageContent(
+        git,
+        bundle,
+        page,
+        content,
+        user,
+        `Agent edit: ${page.path}`,
+      );
+
+      await db
+        .update(schema.agentSessions)
+        .set({ status: "draft_ready", updatedAt: new Date() })
+        .where(eq(schema.agentSessions.id, session.id));
+
+      return { commitOid, branch };
+    },
+  );
 
   server.post<{
     Params: { sessionId: string };

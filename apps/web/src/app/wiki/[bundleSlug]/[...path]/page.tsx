@@ -1,3 +1,4 @@
+import { canAccessAgents } from "@kherad/core/permissions";
 import { Alert, AlertDescription, AlertTitle } from "@kherad/ui/components/ui/alert";
 import { Badge } from "@kherad/ui/components/ui/badge";
 import { Button } from "@kherad/ui/components/ui/button";
@@ -5,9 +6,11 @@ import { ChevronRightIcon, FileClockIcon, PencilIcon } from "lucide-react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
+import { AgentEditPageButton } from "@/components/agents/agent-edit-page-button";
 import { CopyMarkdownButton } from "@/components/wiki/copy-markdown-button";
 import { WikiContent } from "@/components/wiki/wiki-content";
 import { getViewer } from "@/lib/auth";
+import { db } from "@/lib/db";
 import { decodePathSegments } from "@/lib/decode-path-segments";
 import { getDictionary } from "@/lib/i18n/get-dictionary";
 import { getWikiNav } from "@/lib/wiki-nav";
@@ -81,6 +84,12 @@ export default async function WikiPage({ params, searchParams }: Props) {
     </Button>
   ) : null;
 
+  const showAgentEdit =
+    result.kind === "ok" && result.canEdit && !isOkfDoc && (await canAccessAgents(db, viewer));
+  const agentEditButton = showAgentEdit ? (
+    <AgentEditPageButton pageId={result.pageId} bundleId={result.bundleId} />
+  ) : null;
+
   const copyMarkdownButton =
     result.kind === "ok" ? (
       <CopyMarkdownButton
@@ -139,6 +148,7 @@ export default async function WikiPage({ params, searchParams }: Props) {
         </div>
         <div className="flex items-center gap-2">
           {copyMarkdownButton}
+          {agentEditButton}
           {editButton}
         </div>
       </header>

@@ -12,11 +12,10 @@ import { createSearchTools } from "../search-tools";
 const decoder = new TextDecoder();
 
 /**
- * Specialist tool surface: cross-bundle wiki research (every bundle the user
- * can view, not just an attached one), session uploads, structured
- * questions (HITL via UI), and the final propose_document handoff.
+ * Shared research / HITL tools used by both create-mode and edit-mode
+ * specialist sessions (wiki browse, uploads, ask_question, search).
  */
-export function createSpecialistTools(args: {
+export function createResearchTools(args: {
   db: Database;
   git: GitEngine;
   user: AuthedUser;
@@ -162,6 +161,35 @@ export function createSpecialistTools(args: {
     },
   });
 
+  const searchTools = createSearchTools({
+    db,
+    embedderFactory: () => createEmbedder(db),
+    scope: { kind: "user", user },
+  });
+
+  return {
+    list_bundles: listBundles,
+    list_source_pages: listSourcePages,
+    read_source_page: readSourcePage,
+    list_uploads: listUploads,
+    read_upload: readUpload,
+    ask_question: askQuestion,
+    ...searchTools,
+  };
+}
+
+/**
+ * Specialist tool surface for create-mode sessions: research tools plus the
+ * final propose_document handoff that fills agentSessions.draftMarkdown.
+ */
+export function createSpecialistTools(args: {
+  db: Database;
+  git: GitEngine;
+  user: AuthedUser;
+  sessionId: string;
+}) {
+  const { db, sessionId } = args;
+
   const proposeDocument = createTool({
     id: "propose_document",
     description:
@@ -186,20 +214,8 @@ export function createSpecialistTools(args: {
     },
   });
 
-  const searchTools = createSearchTools({
-    db,
-    embedderFactory: () => createEmbedder(db),
-    scope: { kind: "user", user },
-  });
-
   return {
-    list_bundles: listBundles,
-    list_source_pages: listSourcePages,
-    read_source_page: readSourcePage,
-    list_uploads: listUploads,
-    read_upload: readUpload,
-    ask_question: askQuestion,
+    ...createResearchTools(args),
     propose_document: proposeDocument,
-    ...searchTools,
   };
 }

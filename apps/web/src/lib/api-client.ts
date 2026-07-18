@@ -930,6 +930,27 @@ export function deleteChatThread(bundleId: string, threadId: string): Promise<{ 
 
 export type AgentAggressiveness = "relaxed" | "balanced" | "aggressive";
 
+export type AgentSessionMode = "create" | "edit";
+
+export type AgentSectionStatus =
+  | "proposed"
+  | "accepted"
+  | "rejected"
+  | "superseded"
+  | "original";
+
+export type AgentPageSection = {
+  id: string;
+  headingText: string;
+  headingLevel: number;
+  orderIndex: number;
+  status: AgentSectionStatus;
+  html: string;
+  editId: string | null;
+  baseHtml: string | null;
+  proposedHtml: string | null;
+};
+
 export type AgentSessionSummary = {
   id: string;
   title: string;
@@ -947,6 +968,9 @@ export type AgentSession = AgentSessionSummary & {
   uploadCount: number;
   bundle: { id: string; slug: string; title: string; mode: string } | null;
   skills: Array<{ id: string; name: string }>;
+  mode: AgentSessionMode;
+  targetPageId: string | null;
+  sections: AgentPageSection[];
 };
 
 export type AgentUpload = {
@@ -988,10 +1012,32 @@ export function createAgentSession(input: {
   role?: string;
   aggressiveness?: AgentAggressiveness;
   skillIds?: string[];
+  mode?: AgentSessionMode;
+  targetPageId?: string;
 }): Promise<AgentSession> {
   return request(`${API_URL}/agents/sessions`, {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+export function decideSectionEdit(
+  sessionId: string,
+  editId: string,
+  decision: "accept" | "reject",
+): Promise<{ id: string; sectionId: string; status: string; decidedAt: string | null }> {
+  return request(`${API_URL}/agents/sessions/${sessionId}/section-edits/${editId}/decision`, {
+    method: "POST",
+    body: JSON.stringify({ decision }),
+  });
+}
+
+export function saveAgentPageEdit(
+  sessionId: string,
+): Promise<{ commitOid: string; branch: string }> {
+  return request(`${API_URL}/agents/sessions/${sessionId}/save`, {
+    method: "POST",
+    body: JSON.stringify({}),
   });
 }
 

@@ -29,6 +29,11 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AskQuestionCard, extractAskQuestions } from "@/components/agents/ask-question-card";
+import { PageEditViewerPanel } from "@/components/agents/page-edit-viewer-panel";
+import {
+  extractSectionEditProposals,
+  SectionEditProposalCard,
+} from "@/components/agents/section-edit-proposal-card";
 import {
   Conversation,
   ConversationContent,
@@ -57,6 +62,7 @@ import {
   updateAgentSession,
   uploadAgentFile,
   type AgentBundleOption,
+  type AgentPageSection,
   type AgentSession,
   type AgentUpload,
 } from "@/lib/api-client";
@@ -75,6 +81,7 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
 
   const [session, setSession] = useState<AgentSession | null>(null);
   const [uploads, setUploads] = useState<AgentUpload[]>([]);
+  const [sections, setSections] = useState<AgentPageSection[]>([]);
   const [draft, setDraft] = useState("");
   const [bundles, setBundles] = useState<AgentBundleOption[]>([]);
   const [mentionPages, setMentionPages] = useState<MentionPage[]>([]);
@@ -93,11 +100,16 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
     compileNote: string | null;
   } | null>(null);
   const [answeredToolKeys, setAnsweredToolKeys] = useState<Set<string>>(new Set());
+  const [decidedEditKeys, setDecidedEditKeys] = useState<Set<string>>(new Set());
+
+  const isEditMode = session?.mode === "edit";
 
   const labels = {
-    chatTitle: t.agents.specialistChatTitle,
-    chatEmpty: t.agents.specialistChatEmpty,
-    chatPlaceholder: t.agents.specialistChatPlaceholder,
+    chatTitle: isEditMode ? t.agents.editChatTitle : t.agents.specialistChatTitle,
+    chatEmpty: isEditMode ? t.agents.editChatEmpty : t.agents.specialistChatEmpty,
+    chatPlaceholder: isEditMode
+      ? t.agents.editChatPlaceholder
+      : t.agents.specialistChatPlaceholder,
     thinking: t.agents.specialistThinking,
     defaultTitle: "Specialist session",
   };
@@ -106,6 +118,7 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
     const data = await fetchAgentSession(sessionId);
     setSession(data.session);
     setUploads(data.uploads);
+    setSections(data.session.sections ?? []);
     setDraft(data.session.draftMarkdown ?? "");
     if (data.session.bundleId) setImportBundleId(data.session.bundleId);
     return data;
@@ -198,7 +211,7 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
 
   // When propose_document finishes, mirror its markdown into the draft panel.
   useEffect(() => {
-    if (status !== "ready") return;
+    if (status !== "ready" || isEditMode) return;
     const last = messages[messages.length - 1];
     if (!last || last.role !== "assistant") return;
 
@@ -239,7 +252,19 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
           : prev,
       );
     });
-  }, [messages, status]);
+  }, [messages, status, isEditMode]);
+
+  // After propose_section_edit finishes, refresh the viewer from the server.
+  useEffect(() => {
+    if (status !== "ready" || !isEditMode) return;
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== "assistant") return;
+    const proposals = extractSectionEditProposals(last.parts as unknown[]);
+    if (proposals.length === 0) return;
+    queueMicrotask(() => {
+      void reloadSession();
+    });
+  }, [messages, status, isEditMode, reloadSession]);
 
   const busy = status === "submitted" || status === "streaming";
 
@@ -461,8 +486,14 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
               ) : null}
               {messages.map((message, messageIndex) => {
                 const questions = extractAskQuestions(message.parts as unknown[]);
+                const sectionEdits = isEditMode
+                  ? extractSectionEditProposals(message.parts as unknown[])
+                  : [];
                 const isLastAssistant =
                   message.role === "assistant" && messageIndex === messages.length - 1;
+                const skipToolNames = isEditMode
+                  ? ["ask_question", "propose_section_edit"]
+                  : ["ask_question", "propose_document"];
                 return (
                   <Message
                     key={message.id}
@@ -477,6 +508,7 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
                           parts={message.parts}
                           messageId={message.id}
                           reasoningLabel={t.agents.reasoningLabel}
+                          skipToolNames={skipToolNames}
                         />
                       ) : (
                         message.parts.map((part, i) =>
@@ -499,6 +531,37 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
                                 onSubmit={(answer) => {
                                   setAnsweredToolKeys((prev) => new Set(prev).add(key));
                                   void sendMessage({ text: answer });
+                                }}
+                              />
+                            );
+                          })
+                        : null}
+                      {isLastAssistant
+                        ? sectionEdits.map((proposal) => {
+                            const key = `${message.id}:${proposal.editId}`;
+                            const live = sections.find((s) => s.editId === proposal.editId);
+                            const liveStatus =
+                              live?.status === "accepted" ||
+                              live?.status === "rejected" ||
+                              live?.status === "superseded"
+                                ? live.status
+                                : decidedEditKeys.has(key)
+                                  ? ("accepted" as const)
+                                  : proposal.status;
+                            return (
+                              <SectionEditProposalCard
+                                key={key}
+                                sessionId={sessionId}
+                                proposal={{ ...proposal, status: liveStatus }}
+                                readOnly={liveStatus !== "proposed"}
+                                onDecided={(next) => {
+                                  setDecidedEditKeys((prev) => new Set(prev).add(key));
+                                  setSections((prev) =>
+                                    prev.map((s) =>
+                                      s.editId === proposal.editId ? { ...s, status: next } : s,
+                                    ),
+                                  );
+                                  void reloadSession();
                                 }}
                               />
                             );
@@ -546,42 +609,51 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
           </div>
         </div>
 
-        {/* Draft column */}
-        <div className="border-border flex min-h-0 flex-col overflow-hidden rounded-2xl border">
-          <div className="border-border flex items-center justify-between gap-2 border-b px-3 py-2.5">
-            <span className="flex items-center gap-2 text-sm font-semibold">
-              <FileTextIcon className="size-4" />
-              {t.agents.draftTitle}
-            </span>
-            <div className="flex items-center gap-1.5">
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={draftSaving || !draft.trim()}
-                onClick={() => void handleSaveDraft()}
-              >
-                {draftSaving ? t.common.saving : t.agents.draftSave}
-              </Button>
-              <Button size="sm" disabled={!draft.trim()} onClick={openImport}>
-                {t.agents.importButton}
-              </Button>
-            </div>
-          </div>
-          {draftSaved ? (
-            <p className="text-muted-foreground border-border border-b px-3 py-1.5 text-xs">
-              {t.agents.draftSaved}
-            </p>
-          ) : null}
-          <textarea
-            value={draft}
-            onChange={(e) => {
-              setDraft(e.target.value);
-              setDraftSaved(false);
-            }}
-            placeholder={t.agents.draftEmpty}
-            className="placeholder:text-muted-foreground min-h-0 flex-1 resize-none bg-transparent p-4 font-mono text-sm leading-relaxed outline-none"
+        {/* Draft / page viewer column */}
+        {isEditMode ? (
+          <PageEditViewerPanel
+            sessionId={sessionId}
+            bundleId={session.bundleId}
+            sections={sections}
+            onSaved={() => void reloadSession()}
           />
-        </div>
+        ) : (
+          <div className="border-border flex min-h-0 flex-col overflow-hidden rounded-2xl border">
+            <div className="border-border flex items-center justify-between gap-2 border-b px-3 py-2.5">
+              <span className="flex items-center gap-2 text-sm font-semibold">
+                <FileTextIcon className="size-4" />
+                {t.agents.draftTitle}
+              </span>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={draftSaving || !draft.trim()}
+                  onClick={() => void handleSaveDraft()}
+                >
+                  {draftSaving ? t.common.saving : t.agents.draftSave}
+                </Button>
+                <Button size="sm" disabled={!draft.trim()} onClick={openImport}>
+                  {t.agents.importButton}
+                </Button>
+              </div>
+            </div>
+            {draftSaved ? (
+              <p className="text-muted-foreground border-border border-b px-3 py-1.5 text-xs">
+                {t.agents.draftSaved}
+              </p>
+            ) : null}
+            <textarea
+              value={draft}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                setDraftSaved(false);
+              }}
+              placeholder={t.agents.draftEmpty}
+              className="placeholder:text-muted-foreground min-h-0 flex-1 resize-none bg-transparent p-4 font-mono text-sm leading-relaxed outline-none"
+            />
+          </div>
+        )}
       </div>
 
       <Dialog open={importOpen} onOpenChange={setImportOpen}>

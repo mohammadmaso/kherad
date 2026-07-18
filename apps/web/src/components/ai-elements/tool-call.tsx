@@ -28,6 +28,9 @@ const FRIENDLY_NAMES: Record<string, string> = {
   read_upload: "Read upload",
   ask_question: "Ask question",
   propose_document: "Propose document",
+  list_page_sections: "List sections",
+  read_page_section: "Read section",
+  propose_section_edit: "Propose section edit",
 };
 
 function friendlyToolName(name: string): string {

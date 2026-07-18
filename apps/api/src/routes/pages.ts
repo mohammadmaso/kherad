@@ -12,6 +12,7 @@ import type { FastifyInstance } from "fastify";
 import { getBundleOrNull, isUuid } from "../lib/get-bundle";
 import { allocatePagePath, upsertRawPage } from "../lib/page-alloc";
 import { legacyPageGitPath, pageGitPath } from "../lib/wiki-paths";
+import { writePageContent } from "../lib/write-page-content";
 
 export async function pageRoutes(server: FastifyInstance, db: Database, git: GitEngine) {
   async function getRawPageOrNull(bundleId: string, pageId: string) {
@@ -160,12 +161,13 @@ export async function pageRoutes(server: FastifyInstance, db: Database, git: Git
     }
     const user = request.user!;
 
-    const branch = await git.createUserBranch(user.id);
-    const commitOid = await git.writeAndCommit(
-      branch,
-      [{ path: pageGitPath(bundle.slug, page.path), content }],
+    const { commitOid, branch } = await writePageContent(
+      git,
+      bundle,
+      page,
+      content,
+      user,
       `Update page: ${page.path}`,
-      { name: user.displayName, email: user.email },
     );
     const updatedAt = await git.getLastCommitTimestamp(branch);
 

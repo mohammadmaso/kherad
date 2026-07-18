@@ -76,6 +76,14 @@ export const agentSessionStatusEnum = pgEnum("agent_session_status", [
   "imported",
   "archived",
 ]);
+/** create = brand-new page draft; edit = section edits on an existing page. */
+export const agentSessionModeEnum = pgEnum("agent_session_mode", ["create", "edit"]);
+export const agentSectionEditStatusEnum = pgEnum("agent_section_edit_status", [
+  "proposed",
+  "accepted",
+  "rejected",
+  "superseded",
+]);
 // How eagerly the specialist agent asks clarifying questions before drafting.
 export const agentAggressivenessEnum = pgEnum("agent_aggressiveness", [
   "relaxed",
@@ -503,10 +511,49 @@ export const agentSessions = pgTable(
     bundleId: uuid("bundle_id").references(() => bundles.id, { onDelete: "set null" }),
     draftMarkdown: text("draft_markdown"),
     status: agentSessionStatusEnum("status").notNull().default("active"),
+    mode: agentSessionModeEnum("mode").notNull().default("create"),
+    /** Target page for edit-mode sessions (null in create mode). */
+    targetPageId: uuid("target_page_id").references(() => pages.id, { onDelete: "set null" }),
+    /** Git ref the snapshot was taken from (user branch or bundle default). */
+    targetBranch: text("target_branch"),
+    /** Immutable body markdown at session start (edit mode). */
+    targetSnapshotMarkdown: text("target_snapshot_markdown"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index("agent_sessions_user_idx").on(table.userId, table.updatedAt)],
+);
+
+/**
+ * Per-section edit proposals for edit-mode agent sessions. HTML is rendered
+ * server-side at proposal time so the client never runs the markdown pipeline.
+ */
+export const agentSectionEdits = pgTable(
+  "agent_section_edits",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => agentSessions.id, { onDelete: "cascade" }),
+    sectionId: text("section_id").notNull(),
+    headingText: text("heading_text").notNull(),
+    headingLevel: integer("heading_level").notNull(),
+    orderIndex: integer("order_index").notNull(),
+    baseMarkdown: text("base_markdown").notNull(),
+    proposedMarkdown: text("proposed_markdown").notNull(),
+    baseHtml: text("base_html").notNull(),
+    proposedHtml: text("proposed_html").notNull(),
+    status: agentSectionEditStatusEnum("status").notNull().default("proposed"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("agent_section_edits_session_idx").on(
+      table.sessionId,
+      table.sectionId,
+      table.createdAt,
+    ),
+  ],
 );
 
 export const agentMessages = pgTable(
@@ -705,14 +752,26 @@ export const chatMessagesRelations = relations(chatMessages, ({ one }) => ({
 export const agentSessionsRelations = relations(agentSessions, ({ one, many }) => ({
   user: one(users, { fields: [agentSessions.userId], references: [users.id] }),
   bundle: one(bundles, { fields: [agentSessions.bundleId], references: [bundles.id] }),
+  targetPage: one(pages, {
+    fields: [agentSessions.targetPageId],
+    references: [pages.id],
+  }),
   messages: many(agentMessages),
   uploads: many(agentUploads),
   sessionSkills: many(agentSessionSkills),
+  sectionEdits: many(agentSectionEdits),
 }));
 
 export const agentMessagesRelations = relations(agentMessages, ({ one }) => ({
   session: one(agentSessions, {
     fields: [agentMessages.sessionId],
+    references: [agentSessions.id],
+  }),
+}));
+
+export const agentSectionEditsRelations = relations(agentSectionEdits, ({ one }) => ({
+  session: one(agentSessions, {
+    fields: [agentSectionEdits.sessionId],
     references: [agentSessions.id],
   }),
 }));
