@@ -602,6 +602,9 @@ const en = {
   },
   admin: {
     title: "Management",
+    navLabel: "Management sections",
+    showMenu: "Show management menu",
+    hideMenu: "Hide management menu",
     users: "Users",
     bundles: "Bundles",
     mergeRequests: "Merge requests",
@@ -1489,6 +1492,9 @@ const fa: Dictionary = {
   },
   admin: {
     title: "مدیریت",
+    navLabel: "بخش‌های مدیریت",
+    showMenu: "نمایش منوی مدیریت",
+    hideMenu: "پنهان کردن منوی مدیریت",
     users: "کاربران",
     bundles: "مجموعه‌ها",
     mergeRequests: "درخواست‌های ادغام",
