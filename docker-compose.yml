@@ -45,6 +45,10 @@ services:
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
       GIT_REMOTE_SECRET_KEY: ${GIT_REMOTE_SECRET_KEY:-dev-remote-secret-change-me}
       INGEST_SERVICE_URL: http://ingest:4100
+      # Must match the public URL the browser loads web from, or CORS blocks
+      # every request. Comma-separated list is supported.
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
+      API_PUBLIC_URL: ${API_PUBLIC_URL:-http://localhost:4000}
     ports:
       - "4000:4000"
     volumes:
@@ -68,13 +72,15 @@ services:
         GIT_SHA: ${GIT_SHA:-}
         GIT_COMMIT_DATE: ${GIT_COMMIT_DATE:-}
         GIT_REPO_URL: ${GIT_REPO_URL:-https://github.com/mohammadmaso/kherad}
+        # Next.js inlines NEXT_PUBLIC_* vars at build time, so this must be a
+        # build arg (not a runtime `environment:` entry below) to take effect.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
     restart: unless-stopped
     environment:
       PORT: 3000
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/kherad
       GIT_REPO_PATH: /data/git-repo
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
-      NEXT_PUBLIC_API_URL: http://localhost:4000
     ports:
       - "3000:3000"
     volumes:
@@ -84,6 +90,12 @@ services:
         condition: service_healthy
       api:
         condition: service_started
+    networks:
+      - webserver
 
 volumes:
   postgres_data:
+
+networks:
+  webserver:
+    external: true
