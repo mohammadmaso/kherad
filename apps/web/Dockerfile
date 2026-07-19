@@ -1,31 +1,31 @@
-FROM node:20-alpine AS base
+# syntax=docker/dockerfile:1
 
-FROM base AS builder
-RUN apk update && apk add --no-cache libc6-compat
+FROM node:20-alpine AS base
+RUN apk add --no-cache libc6-compat
 WORKDIR /app
-RUN npm install -g turbo
+ENV PNPM_HOME="/pnpm" \
+    PATH="/pnpm:$PATH" \
+    NEXT_TELEMETRY_DISABLED=1
+RUN corepack enable && corepack prepare pnpm@10.34.4 --activate
+
+FROM base AS prepare
+RUN npm install -g turbo@2.3.3
 COPY . .
 RUN turbo prune web --docker
 
-FROM base AS installer
-RUN apk update && apk add --no-cache libc6-compat
-WORKDIR /app
-RUN npm install -g pnpm
-
-COPY --from=builder /app/out/json/ .
+FROM base AS builder
+COPY --from=prepare /app/out/json/ .
 RUN pnpm install --frozen-lockfile
 
-COPY --from=builder /app/out/full/ .
-COPY --from=builder /app/tsconfig.base.json .
+COPY --from=prepare /app/out/full/ .
+COPY --from=prepare /app/tsconfig.base.json .
 
-# Optional build metadata for the About page (pass via docker compose build args).
+# Build-time metadata / public env — kept after install so SHA/version
+# changes do not invalidate the dependency layer.
 ARG APP_VERSION=
 ARG GIT_SHA=
 ARG GIT_COMMIT_DATE=
 ARG GIT_REPO_URL=https://github.com/mohammadmaso/kherad
-# Next.js inlines NEXT_PUBLIC_* vars into the client bundle at build time, so
-# the API base URL must be supplied here rather than as a runtime `environment:`
-# entry in docker-compose.yml (which has no effect on already-built pages/JS).
 ARG NEXT_PUBLIC_API_URL=http://localhost:4000
 ENV NEXT_PUBLIC_APP_VERSION=$APP_VERSION \
     NEXT_PUBLIC_GIT_SHA=$GIT_SHA \
@@ -33,17 +33,28 @@ ENV NEXT_PUBLIC_APP_VERSION=$APP_VERSION \
     NEXT_PUBLIC_GIT_REPO_URL=$GIT_REPO_URL \
     NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
+# Placeholders so `next build` can import route modules that read env at
+# load time. Runtime values come from compose / orchestrator.
+ENV DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/kherad \
+    JWT_SECRET=build-time-placeholder \
+    GIT_REPO_PATH=/tmp/git-repo
+
 RUN pnpm turbo build --filter=web...
 
-FROM base AS runner
+# Standalone output only — no pnpm, no full monorepo, no devDependencies.
+FROM node:20-alpine AS runner
 WORKDIR /app
-RUN npm install -g pnpm
 RUN addgroup --system --gid 1001 nodejs \
   && adduser --system --uid 1001 nextjs
+
+COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/static ./apps/web/.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/apps/web/public ./apps/web/public
+
 USER nextjs
-
-COPY --from=installer /app .
-
-ENV NODE_ENV=production
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
 EXPOSE 3000
-CMD ["pnpm", "--filter=web", "start"]
+CMD ["node", "apps/web/server.js"]

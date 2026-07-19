@@ -1,6 +1,40 @@
-node_modules
+# Dependencies & build outputs (rebuilt inside the image)
 **/node_modules
 **/dist
 **/.next
 **/.turbo
+**/*.tsbuildinfo
+
+# VCS / editor
 .git
+.gitignore
+.github
+.vscode
+.cursor
+.claude
+**/.DS_Store
+
+# Local env & data (bind-mounted at runtime; never bake into images)
+**/.env
+**/.env.*
+!**/.env.example
+apps/api/data
+**/coverage
+**/tmp
+**/.cache
+
+# Docs, screenshots, and other non-runtime assets
+docs
+**/README.md
+**/*.md
+!packages/**/README.md
+LICENSE
+
+# Ingest has its own build context; keep monorepo context lean
+apps/ingest/.venv
+apps/ingest/**/__pycache__
+
+# Test fixtures / lockfiles not needed for prune+build
+**/*.test.ts
+**/*.spec.ts
+**/vitest.config.*

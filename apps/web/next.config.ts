@@ -32,6 +32,10 @@ const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8
 };
 
 const nextConfig: NextConfig = {
+  // Emit a traced Node server under .next/standalone for slim Docker images.
+  output: "standalone",
+  // Include workspace packages outside apps/web in the file trace.
+  outputFileTracingRoot: join(rootDir, "../.."),
   transpilePackages: ["@kherad/core", "@kherad/ui"],
   env: {
     NEXT_PUBLIC_APP_VERSION: pick(

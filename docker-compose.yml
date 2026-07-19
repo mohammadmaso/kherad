@@ -93,6 +93,8 @@ services:
       api:
         condition: service_started
     networks:
+      # default: reach api/postgres; webserver: reverse-proxy / public edge
+      - default
       - webserver
 
 volumes:

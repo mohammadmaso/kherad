@@ -4,7 +4,15 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": [".next/**", "!.next/cache/**", "dist/**"]
+      "outputs": [".next/**", "!.next/cache/**", "dist/**"],
+      "env": [
+        "NEXT_PUBLIC_APP_VERSION",
+        "NEXT_PUBLIC_GIT_SHA",
+        "NEXT_PUBLIC_GIT_COMMIT_DATE",
+        "NEXT_PUBLIC_GIT_REPO_URL",
+        "NEXT_PUBLIC_API_URL"
+      ],
+      "passThroughEnv": ["DATABASE_URL", "JWT_SECRET", "GIT_REPO_PATH"]
     },
     "dev": {
       "cache": false,
