@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { folderGitKeepPath, wikiPathFromRawGitEntry } from "./paths";
 import {
   normalizePagePath,
   pagePathFromTitle,
@@ -73,6 +74,19 @@ describe("resolveCreatePagePath", () => {
 
   it("falls back to the title slug", () => {
     expect(resolveCreatePagePath({ title: "Payroll Policy" })).toBe("payroll-policy");
+  });
+});
+
+describe("folderGitKeepPath", () => {
+  it("builds the keep-file path under raw/", () => {
+    expect(folderGitKeepPath("demo", "guides/setup")).toBe("raw/demo/guides/setup/.gitkeep");
+  });
+});
+
+describe("wikiPathFromRawGitEntry", () => {
+  it("maps keep files to folder paths and pages to site paths", () => {
+    expect(wikiPathFromRawGitEntry("guides/setup/.gitkeep")).toBe("guides/setup");
+    expect(wikiPathFromRawGitEntry("guides/start.md")).toBe("guides/start");
   });
 });
 

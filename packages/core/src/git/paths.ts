@@ -17,6 +17,33 @@ export function pageGitPath(bundleSlug: string, pagePath: string): string {
 }
 
 /**
+ * Placeholder blob that keeps an otherwise-empty directory in git
+ * (`raw/<slug>/<folder>/.gitkeep`). Without it, empty trees are pruned.
+ */
+export function folderGitKeepPath(bundleSlug: string, folderPath: string): string {
+  return `raw/${bundleSlug}/${folderPath}/.gitkeep`;
+}
+
+/** Folder path from a bundle-relative git entry, or null if not a keep file. */
+export function folderPathFromGitKeep(relativeGitPath: string): string | null {
+  if (relativeGitPath === ".gitkeep") return null;
+  if (relativeGitPath.endsWith("/.gitkeep")) {
+    return relativeGitPath.slice(0, -"/.gitkeep".length);
+  }
+  return null;
+}
+
+/**
+ * Maps a bundle-relative git path (under `raw/<slug>/`) to the permission /
+ * wiki path used for edit checks: pages drop `.md`, keep-files become folders.
+ */
+export function wikiPathFromRawGitEntry(relativeGitPath: string): string {
+  const folder = folderPathFromGitKeep(relativeGitPath);
+  if (folder !== null) return folder;
+  return relativeGitPath.replace(/\.md$/, "");
+}
+
+/**
  * Pre-rename layout (`wiki/<slug>/…`). Kept so existing repos still resolve
  * until every page has been re-saved into `raw/`.
  */

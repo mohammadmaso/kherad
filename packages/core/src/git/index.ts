@@ -8,6 +8,8 @@ export {
 export { MergeConflictDetectedError } from "./merge";
 export {
   bundleGitPathPrefix,
+  folderGitKeepPath,
+  folderPathFromGitKeep,
   isImageAssetPath,
   legacyBundleGitPathPrefix,
   legacyPageGitPath,
@@ -16,6 +18,7 @@ export {
   resolveCreatePagePath,
   resolvePagePath,
   slugifyPagePath,
+  wikiPathFromRawGitEntry,
   DOCUMENTS_GIT_PATH_PREFIX,
   okfDocGitPath,
   okfDocSitePath,

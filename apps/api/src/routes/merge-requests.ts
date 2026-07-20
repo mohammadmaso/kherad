@@ -6,6 +6,7 @@ import {
   okfDocSitePath,
   okfGitPathPrefix,
   userBranchName,
+  wikiPathFromRawGitEntry,
   type GitEngine,
 } from "@kherad/core/git";
 import { checkPermission } from "@kherad/core/permissions";
@@ -146,7 +147,7 @@ export async function mergeRequestRoutes(server: FastifyInstance, db: Database, 
       }
       const touchedPaths = changed.map((entry) => {
         const relative = entry.path.slice(prefix.length + 1);
-        return scope === "okf" ? okfDocSitePath(relative) : relative.replace(/\.md$/, "");
+        return scope === "okf" ? okfDocSitePath(relative) : wikiPathFromRawGitEntry(relative);
       });
       const permitted = await Promise.all(
         touchedPaths.map((path) => checkPermission(db, user, bundle, path, "edit")),

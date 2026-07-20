@@ -21,23 +21,29 @@ import { CompilePanel } from "@/components/compile/compile-panel";
 import { DocTree } from "@/components/wiki/doc-tree";
 import { PagePathFields } from "@/components/wiki/page-path-fields";
 import {
+  createFolder,
   createPage,
   deleteFolder,
   deletePage,
   fetchBundle,
+  fetchBundleFolders,
   fetchBundlePages,
   fetchOkfDocs,
+  renameFolder,
+  submitForReview,
   type AdminBundle,
   type OkfDocSummary,
   type PageSummary,
 } from "@/lib/api-client";
-import { resolveCreatePagePath } from "@kherad/core/page-paths";
+import { resolveCreatePagePath, slugifyPagePath } from "@kherad/core/page-paths";
 import { buildTree, existingFolderPaths, isFolderNode, type WikiNavNode } from "@/lib/page-tree";
 import { useI18n } from "@/lib/i18n/provider";
 
 type DeleteTarget =
   | { kind: "page"; page: PageSummary }
   | { kind: "folder"; path: string; name: string; count: number };
+
+type RenameFolderTarget = { path: string; name: string };
 
 function countPagesUnder(pages: PageSummary[], prefix: string): number {
   return pages.filter((page) => page.path === prefix || page.path.startsWith(`${prefix}/`)).length;
@@ -50,20 +56,31 @@ export default function BundleDetailPage() {
 
   const [bundle, setBundle] = useState<AdminBundle | null>(null);
   const [pages, setPages] = useState<PageSummary[] | null>(null);
+  const [emptyFolders, setEmptyFolders] = useState<string[]>([]);
   const [okfDocs, setOkfDocs] = useState<OkfDocSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [folderDialogOpen, setFolderDialogOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const [parentPath, setParentPath] = useState("");
   const [path, setPath] = useState("");
   const [title, setTitle] = useState("");
-  const existingFolders = useMemo(() => existingFolderPaths(pages ?? []), [pages]);
+  const [folderPath, setFolderPath] = useState("");
+  const existingFolders = useMemo(
+    () => existingFolderPaths(pages ?? [], emptyFolders),
+    [pages, emptyFolders],
+  );
+  const docTree = useMemo(() => buildTree(pages ?? [], emptyFolders), [pages, emptyFolders]);
 
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [deleteConfirmName, setDeleteConfirmName] = useState("");
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<RenameFolderTarget | null>(null);
+  const [renamePath, setRenamePath] = useState("");
+  const [renameSubmitting, setRenameSubmitting] = useState(false);
 
   function openCreateDialog() {
     setParentPath("");
@@ -79,14 +96,26 @@ export default function BundleDetailPage() {
     setTitle("");
   }
 
+  function openFolderDialog() {
+    setFolderPath("");
+    setFolderDialogOpen(true);
+  }
+
+  function closeFolderDialog() {
+    setFolderDialogOpen(false);
+    setFolderPath("");
+  }
+
   const load = useCallback(async () => {
     const bundleRow = await fetchBundle(bundleId);
-    const [pageRows, okfDocRows] = await Promise.all([
+    const [pageRows, folderRows, okfDocRows] = await Promise.all([
       fetchBundlePages(bundleId),
+      fetchBundleFolders(bundleId).catch(() => [] as string[]),
       bundleRow.mode === "llm_compiled" ? fetchOkfDocs(bundleId) : Promise.resolve(null),
     ]);
     setBundle(bundleRow);
     setPages(pageRows);
+    setEmptyFolders(folderRows);
     setOkfDocs(okfDocRows);
   }, [bundleId]);
 
@@ -110,6 +139,7 @@ export default function BundleDetailPage() {
   async function handleCreate() {
     setSubmitting(true);
     setError(null);
+    setSuccess(null);
     try {
       const resolvedPath = resolveCreatePagePath({
         folder: parentPath,
@@ -125,6 +155,32 @@ export default function BundleDetailPage() {
       router.push(`/bundles/${bundleId}/pages/${page.id}/edit`);
     } catch (err) {
       setError(err instanceof Error ? err.message : t.bundles.createFailed);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleCreateFolder(submitReview: boolean) {
+    setSubmitting(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const resolved = slugifyPagePath(folderPath);
+      if (!resolved) {
+        setError(t.bundles.folderCreateFailed);
+        return;
+      }
+      const result = await createFolder(bundleId, resolved);
+      if (submitReview) {
+        await submitForReview(bundleId);
+        setSuccess(t.bundles.folderCreateSubmitted(result.path));
+      } else {
+        setSuccess(t.bundles.folderCreateSuccess(result.path));
+      }
+      closeFolderDialog();
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t.bundles.folderCreateFailed);
     } finally {
       setSubmitting(false);
     }
@@ -146,6 +202,39 @@ export default function BundleDetailPage() {
       count: countPagesUnder(pages, node.path),
     });
     setDeleteConfirmName("");
+  }
+
+  function openRenameFolder(node: WikiNavNode) {
+    setRenameTarget({ path: node.path, name: node.name });
+    setRenamePath(node.path);
+  }
+
+  function closeRenameDialog() {
+    setRenameTarget(null);
+    setRenamePath("");
+  }
+
+  async function handleRenameFolder() {
+    if (!renameTarget) return;
+    setRenameSubmitting(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const next = slugifyPagePath(renamePath);
+      if (!next) {
+        setError(t.bundles.renameFolderFailed);
+        return;
+      }
+      const result = await renameFolder(bundleId, renameTarget.path, next);
+      await submitForReview(bundleId);
+      setSuccess(t.bundles.renameFolderSubmitted(result.pathPrefix, result.newPath));
+      closeRenameDialog();
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t.bundles.renameFolderFailed);
+    } finally {
+      setRenameSubmitting(false);
+    }
   }
 
   function closeDeleteDialog() {
@@ -195,14 +284,24 @@ export default function BundleDetailPage() {
           </Link>
         ) : null}
         {isFolder ? (
-          <button
-            type="button"
-            onClick={() => openDeleteFolder(node)}
-            className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors duration-150"
-            aria-label={t.bundles.deleteFolder}
-          >
-            <Trash2Icon className="size-3.5" />
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={() => openRenameFolder(node)}
+              className="text-muted-foreground hover:bg-muted/60 hover:text-foreground flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors duration-150"
+              aria-label={t.bundles.renameFolder}
+            >
+              <PencilIcon className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => openDeleteFolder(node)}
+              className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors duration-150"
+              aria-label={t.bundles.deleteFolder}
+            >
+              <Trash2Icon className="size-3.5" />
+            </button>
+          </>
         ) : node.page ? (
           <button
             type="button"
@@ -300,6 +399,9 @@ export default function BundleDetailPage() {
             >
               {t.bundles.importDocument}
             </Button>
+            <Button variant="outline" size="sm" onClick={openFolderDialog}>
+              {t.bundles.newFolder}
+            </Button>
             <Button size="sm" onClick={openCreateDialog}>
               {bundle.mode === "llm_compiled" ? t.bundles.newSource : t.bundles.newDocument}
             </Button>
@@ -350,6 +452,12 @@ export default function BundleDetailPage() {
         </Dialog>
       </div>
 
+      {success ? (
+        <Alert>
+          <AlertDescription>{success}</AlertDescription>
+        </Alert>
+      ) : null}
+
       {error ? (
         <Alert variant="destructive">
           <AlertTitle>{t.common.error}</AlertTitle>
@@ -364,7 +472,7 @@ export default function BundleDetailPage() {
           {bundle.mode === "llm_compiled" ? t.bundles.sourceDocuments : t.bundles.documents}
         </h2>
         <DocTree
-          tree={buildTree(pages)}
+          tree={docTree}
           linkFor={(node) =>
             bundle.mode === "llm_compiled"
               ? `/sources/${bundle.slug}/${node.path}`
@@ -402,6 +510,117 @@ export default function BundleDetailPage() {
           />
         </div>
       ) : null}
+
+      <Dialog
+        open={folderDialogOpen}
+        onOpenChange={(open) => {
+          if (open) openFolderDialog();
+          else closeFolderDialog();
+        }}
+      >
+        <DialogContent className="flex flex-col gap-4">
+          <DialogHeader>
+            <DialogTitle>{t.bundles.newFolder}</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            <p className="text-muted-foreground text-sm">{t.bundles.folderCreateHint}</p>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="folder-path">{t.bundles.folderPathLabel}</Label>
+              <Input
+                id="folder-path"
+                autoFocus
+                value={folderPath}
+                onChange={(e) => setFolderPath(e.target.value)}
+                placeholder={t.bundles.folderPathPlaceholder}
+                autoComplete="off"
+                spellCheck={false}
+                dir="ltr"
+                className="font-mono"
+              />
+              {slugifyPagePath(folderPath) ? (
+                <p className="text-muted-foreground text-xs">
+                  {t.bundles.pathCreatesPrefix}{" "}
+                  <span className="text-foreground/80 font-mono">
+                    /{slugifyPagePath(folderPath)}
+                  </span>
+                </p>
+              ) : null}
+            </div>
+          </div>
+          <DialogFooter className="mt-0 flex-wrap gap-2">
+            <Button variant="outline" onClick={closeFolderDialog}>
+              {t.common.cancel}
+            </Button>
+            <Button
+              variant="outline"
+              disabled={submitting || !slugifyPagePath(folderPath)}
+              onClick={() => void handleCreateFolder(false)}
+            >
+              {t.bundles.folderCreate}
+            </Button>
+            <Button
+              disabled={submitting || !slugifyPagePath(folderPath)}
+              onClick={() => void handleCreateFolder(true)}
+            >
+              {t.bundles.folderCreateAndSubmit}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={renameTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) closeRenameDialog();
+        }}
+      >
+        <DialogContent className="flex flex-col gap-4">
+          <DialogHeader>
+            <DialogTitle>{t.bundles.renameFolderTitle}</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            <p className="text-muted-foreground text-sm">{t.bundles.renameFolderDesc}</p>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="rename-folder-path">{t.bundles.renameFolderPathLabel}</Label>
+              <Input
+                id="rename-folder-path"
+                autoFocus
+                value={renamePath}
+                onChange={(e) => setRenamePath(e.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                dir="ltr"
+                className="font-mono"
+              />
+              {renameTarget && slugifyPagePath(renamePath) ? (
+                <p className="text-muted-foreground text-xs">
+                  <span className="font-mono">/{renameTarget.path}</span>
+                  {" → "}
+                  <span className="text-foreground/80 font-mono">
+                    /{slugifyPagePath(renamePath)}
+                  </span>
+                </p>
+              ) : null}
+            </div>
+          </div>
+          <DialogFooter className="mt-0">
+            <Button variant="outline" onClick={closeRenameDialog}>
+              {t.common.cancel}
+            </Button>
+            <Button
+              disabled={
+                renameSubmitting ||
+                !renameTarget ||
+                !slugifyPagePath(renamePath) ||
+                slugifyPagePath(renamePath) === renameTarget.path
+              }
+              onClick={() => void handleRenameFolder()}
+            >
+              {t.bundles.renameFolder}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={deleteTarget !== null}

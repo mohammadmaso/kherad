@@ -142,8 +142,8 @@ export function deletePage(
 }
 
 /**
- * Soft-deletes every document at/under `pathPrefix`.
- * `confirmName` must match the folder's last path segment exactly.
+ * Soft-deletes every document at/under `pathPrefix` (and removes folder
+ * placeholders). `confirmName` must match the folder's last path segment exactly.
  */
 export function deleteFolder(
   bundleId: string,
@@ -153,6 +153,34 @@ export function deleteFolder(
   return request(`${API_URL}/bundles/${bundleId}/folders`, {
     method: "DELETE",
     body: JSON.stringify({ pathPrefix, confirmName }),
+  });
+}
+
+/** Creates a directory (no document) via `.gitkeep` on the author's branch. */
+export function createFolder(
+  bundleId: string,
+  path: string,
+): Promise<{ path: string }> {
+  return request(`${API_URL}/bundles/${bundleId}/folders`, {
+    method: "POST",
+    body: JSON.stringify({ path }),
+  });
+}
+
+/** Empty / placeholder folder paths visible on the author's branch (or main). */
+export function fetchBundleFolders(bundleId: string): Promise<string[]> {
+  return request(`${API_URL}/bundles/${bundleId}/folders`);
+}
+
+/** Renames a folder prefix (pages + placeholders) on the author's branch. */
+export function renameFolder(
+  bundleId: string,
+  pathPrefix: string,
+  newPath: string,
+): Promise<{ pathPrefix: string; newPath: string; movedPages: number; movedFolders: number }> {
+  return request(`${API_URL}/bundles/${bundleId}/folders/rename`, {
+    method: "POST",
+    body: JSON.stringify({ pathPrefix, newPath }),
   });
 }
 

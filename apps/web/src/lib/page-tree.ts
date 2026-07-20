@@ -1,21 +1,20 @@
 export type WikiNavPage = { id: string; path: string; title: string };
 
 /**
- * One entry in the sidebar tree. A node is either a folder (`children`) or a
- * document (`page`) — never both in the UI. Intermediate path segments are
- * folders; only leaf paths are documents. A page row that shares a folder's
- * path may still be attached for metadata, but callers must treat
- * `children.length > 0` as folder-only.
+ * One entry in the sidebar tree. A node is either a folder (`children` or an
+ * empty-folder placeholder) or a document (`page`) — never both in the UI.
  */
 export type WikiNavNode = {
   name: string;
   path: string;
   page: WikiNavPage | null;
   children: WikiNavNode[];
+  /** Directory exists via `.gitkeep` (or similar) with no pages under it yet. */
+  emptyFolder?: boolean;
 };
 
 export function isFolderNode(node: WikiNavNode): boolean {
-  return node.children.length > 0;
+  return node.children.length > 0 || Boolean(node.emptyFolder);
 }
 
 export function labelFor(node: WikiNavNode): string {
@@ -40,14 +39,23 @@ export function sortTree(nodes: WikiNavNode[]): void {
 
 /**
  * Folder prefixes that already exist in the tree (ancestor segments only —
- * never a document's own path). Used when placing a new page under a folder.
+ * never a document's own path), plus any explicit empty-folder paths.
  */
-export function existingFolderPaths(pages: { path: string }[]): string[] {
-  const folders = new Set<string>();
+export function existingFolderPaths(
+  pages: { path: string }[],
+  emptyFolders: string[] = [],
+): string[] {
+  const folders = new Set<string>(emptyFolders);
   for (const page of pages) {
     const segments = page.path.split("/");
     // Skip the final segment — that's the document, not a folder.
     for (let i = 1; i < segments.length; i++) {
+      folders.add(segments.slice(0, i).join("/"));
+    }
+  }
+  for (const folder of emptyFolders) {
+    const segments = folder.split("/");
+    for (let i = 1; i <= segments.length; i++) {
       folders.add(segments.slice(0, i).join("/"));
     }
   }
@@ -74,8 +82,8 @@ export function childFolderNames(folders: string[], parent: string): string[] {
   return [...names].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
 }
 
-/** Builds a folder/file tree from a flat list of pages, sorted folders-first then alphabetically. */
-export function buildTree(pages: WikiNavPage[]): WikiNavNode[] {
+/** Builds a folder/file tree from pages plus optional empty directory paths. */
+export function buildTree(pages: WikiNavPage[], emptyFolders: string[] = []): WikiNavNode[] {
   const roots: WikiNavNode[] = [];
   const byPath = new Map<string, WikiNavNode>();
 
@@ -97,6 +105,14 @@ export function buildTree(pages: WikiNavPage[]): WikiNavNode[] {
   for (const page of pages) {
     const segments = page.path.split("/");
     nodeAt(page.path, segments[segments.length - 1] ?? page.path).page = page;
+  }
+
+  for (const folder of emptyFolders) {
+    const segments = folder.split("/");
+    const node = nodeAt(folder, segments[segments.length - 1] ?? folder);
+    if (!node.page && node.children.length === 0) {
+      node.emptyFolder = true;
+    }
   }
 
   sortTree(roots);

@@ -1,6 +1,10 @@
 import {
+  bundleGitPathPrefix,
+  folderGitKeepPath,
+  folderPathFromGitKeep,
   normalizePagePath,
   resolvePagePath,
+  slugifyPagePath,
   userBranchName,
   type GitEngine,
 } from "@kherad/core/git";
@@ -13,6 +17,27 @@ import { getBundleOrNull, isUuid } from "../lib/get-bundle";
 import { allocatePagePath, upsertRawPage } from "../lib/page-alloc";
 import { legacyPageGitPath, pageGitPath } from "../lib/wiki-paths";
 import { writePageContent } from "../lib/write-page-content";
+
+async function listFolderPathsAtRef(
+  git: GitEngine,
+  ref: string,
+  bundleSlug: string,
+): Promise<string[]> {
+  const prefix = bundleGitPathPrefix(bundleSlug);
+  const files = await git.listFilesAtRef(ref, prefix);
+  const folders = new Set<string>();
+  for (const gitPath of files) {
+    const relative = gitPath.slice(prefix.length + 1);
+    const folder = folderPathFromGitKeep(relative);
+    if (folder) {
+      const segments = folder.split("/");
+      for (let i = 1; i <= segments.length; i++) {
+        folders.add(segments.slice(0, i).join("/"));
+      }
+    }
+  }
+  return [...folders].sort((a, b) => a.localeCompare(b));
+}
 
 export async function pageRoutes(server: FastifyInstance, db: Database, git: GitEngine) {
   async function getRawPageOrNull(bundleId: string, pageId: string) {
@@ -96,6 +121,78 @@ export async function pageRoutes(server: FastifyInstance, db: Database, git: Git
       );
 
       return visible.filter((page): page is NonNullable<typeof page> => page !== null);
+    },
+  );
+
+  /**
+   * Create a directory without a document by committing `.gitkeep` on the
+   * author's branch. Nested paths create the full tree; submit for review to
+   * merge onto main.
+   */
+  server.post<{
+    Params: { bundleId: string };
+    Body: { path?: string };
+  }>("/bundles/:bundleId/folders", async (request, reply) => {
+    const bundle = await getBundleOrNull(db, request.params.bundleId);
+    if (!bundle) {
+      return reply.code(404).send({ error: "Bundle not found" });
+    }
+    if (!request.user) {
+      return reply.code(403).send({ error: "Forbidden" });
+    }
+
+    const path = typeof request.body?.path === "string" ? slugifyPagePath(request.body.path) : null;
+    if (!path) {
+      return reply.code(400).send({ error: "Invalid path" });
+    }
+
+    const allowed = await checkPermission(db, request.user, bundle, path, "edit");
+    if (!allowed) {
+      return reply.code(403).send({ error: "Forbidden" });
+    }
+    const user = request.user;
+
+    const branch = await git.createUserBranch(user.id);
+    const keepPath = folderGitKeepPath(bundle.slug, path);
+    const existing = await git.getFileAtRef(branch, keepPath);
+    if (existing !== null) {
+      return reply.code(409).send({ error: "Folder already exists", path });
+    }
+
+    await git.writeAndCommit(
+      branch,
+      [{ path: keepPath, content: "" }],
+      `Create folder: ${path}`,
+      { name: user.displayName, email: user.email },
+    );
+
+    reply.code(201);
+    return { path };
+  });
+
+  /** Empty / placeholder folders visible on the author's branch (or main). */
+  server.get<{ Params: { bundleId: string } }>(
+    "/bundles/:bundleId/folders",
+    async (request, reply) => {
+      const bundle = await getBundleOrNull(db, request.params.bundleId);
+      if (!bundle) {
+        return reply.code(404).send({ error: "Bundle not found" });
+      }
+
+      const user = request.user;
+      let ref = bundle.defaultBranch;
+      if (user) {
+        const branch = userBranchName(user.id);
+        if ((await git.getRefOid(branch)) !== null) ref = branch;
+      }
+
+      const folders = await listFolderPathsAtRef(git, ref, bundle.slug);
+      const visible = await Promise.all(
+        folders.map(async (path) =>
+          (await checkPermission(db, request.user, bundle, path, "view")) ? path : null,
+        ),
+      );
+      return visible.filter((path): path is string => path !== null);
     },
   );
 
@@ -320,8 +417,8 @@ export async function pageRoutes(server: FastifyInstance, db: Database, git: Git
     return updated;
   });
 
-  // Soft-delete every raw page at/under a path prefix (folders are not
-  // first-class — they're derived from page paths). Requires typing the
+  // Soft-delete every raw page at/under a path prefix, and remove any
+  // `.gitkeep` placeholders that hold empty directories. Requires typing the
   // folder's last path segment as confirmName.
   server.delete<{
     Params: { bundleId: string };
@@ -330,6 +427,9 @@ export async function pageRoutes(server: FastifyInstance, db: Database, git: Git
     const bundle = await getBundleOrNull(db, request.params.bundleId);
     if (!bundle) {
       return reply.code(404).send({ error: "Bundle not found" });
+    }
+    if (!request.user) {
+      return reply.code(403).send({ error: "Forbidden" });
     }
 
     const rawPrefix = request.body?.pathPrefix;
@@ -359,38 +459,242 @@ export async function pageRoutes(server: FastifyInstance, db: Database, git: Git
         or(eq(schema.pages.path, pathPrefix), like(schema.pages.path, `${pathPrefix}/%`)),
       ),
     });
-    if (pages.length === 0) {
+
+    const user = request.user;
+    const branch = await git.createUserBranch(user.id);
+    const prefix = bundleGitPathPrefix(bundle.slug);
+    const gitFiles = await git.listFilesAtRef(branch, prefix);
+    const keepFiles = gitFiles.filter((gitPath) => {
+      const relative = gitPath.slice(prefix.length + 1);
+      const folder = folderPathFromGitKeep(relative);
+      return (
+        folder !== null && (folder === pathPrefix || folder.startsWith(`${pathPrefix}/`))
+      );
+    });
+
+    if (pages.length === 0 && keepFiles.length === 0) {
       return reply.code(404).send({ error: "Folder not found" });
     }
 
+    const permissionPaths = [
+      ...pages.map((page) => page.path),
+      ...keepFiles.map((gitPath) => {
+        const relative = gitPath.slice(prefix.length + 1);
+        return folderPathFromGitKeep(relative)!;
+      }),
+      pathPrefix,
+    ];
     const permissions = await Promise.all(
-      pages.map((page) => checkPermission(db, request.user, bundle, page.path, "edit")),
+      [...new Set(permissionPaths)].map((path) =>
+        checkPermission(db, request.user, bundle, path, "edit"),
+      ),
     );
     if (permissions.some((allowed) => !allowed)) {
       return reply.code(403).send({ error: "Forbidden" });
     }
-    const user = request.user!;
 
-    const branch = await git.createUserBranch(user.id);
-    const files = pages.flatMap((page) => [
-      { path: pageGitPath(bundle.slug, page.path), content: null as string | null },
-      { path: legacyPageGitPath(bundle.slug, page.path), content: null as string | null },
-    ]);
+    const files = [
+      ...pages.flatMap((page) => [
+        { path: pageGitPath(bundle.slug, page.path), content: null as string | null },
+        { path: legacyPageGitPath(bundle.slug, page.path), content: null as string | null },
+      ]),
+      ...keepFiles.map((path) => ({ path, content: null as string | null })),
+    ];
     await git.writeAndCommit(
       branch,
       files,
-      `Delete folder: ${pathPrefix} (${pages.length} page${pages.length === 1 ? "" : "s"})`,
+      `Delete folder: ${pathPrefix}`,
       { name: user.displayName, email: user.email },
     );
 
-    await db
-      .update(schema.pages)
-      .set({ isDeleted: true })
-      .where(inArray(
-        schema.pages.id,
-        pages.map((page) => page.id),
-      ));
+    if (pages.length > 0) {
+      await db
+        .update(schema.pages)
+        .set({ isDeleted: true })
+        .where(
+          inArray(
+            schema.pages.id,
+            pages.map((page) => page.id),
+          ),
+        );
+    }
 
     return { deleted: true, count: pages.length, pathPrefix };
+  });
+
+  /**
+   * Rename a folder prefix: moves every page and `.gitkeep` under `pathPrefix`
+   * to `newPath` on the author's branch, and updates Postgres with redirect
+   * tombstones (same pattern as page rename).
+   */
+  server.post<{
+    Params: { bundleId: string };
+    Body: { pathPrefix?: string; newPath?: string };
+  }>("/bundles/:bundleId/folders/rename", async (request, reply) => {
+    const bundle = await getBundleOrNull(db, request.params.bundleId);
+    if (!bundle) {
+      return reply.code(404).send({ error: "Bundle not found" });
+    }
+    if (!request.user) {
+      return reply.code(403).send({ error: "Forbidden" });
+    }
+
+    const rawOld =
+      typeof request.body?.pathPrefix === "string"
+        ? normalizePagePath(request.body.pathPrefix)
+        : null;
+    const rawNew =
+      typeof request.body?.newPath === "string" ? slugifyPagePath(request.body.newPath) : null;
+    if (!rawOld || !rawNew) {
+      return reply.code(400).send({ error: "pathPrefix and newPath are required" });
+    }
+    const pathPrefix: string = rawOld;
+    const newPath: string = rawNew;
+    if (newPath === pathPrefix) {
+      return reply.code(400).send({ error: "New path is the same as the current path" });
+    }
+    if (newPath.startsWith(`${pathPrefix}/`) || pathPrefix.startsWith(`${newPath}/`)) {
+      return reply.code(400).send({ error: "Cannot rename a folder into itself" });
+    }
+
+    const pages = await db.query.pages.findMany({
+      where: and(
+        eq(schema.pages.bundleId, bundle.id),
+        eq(schema.pages.source, "raw"),
+        eq(schema.pages.isDeleted, false),
+        or(eq(schema.pages.path, pathPrefix), like(schema.pages.path, `${pathPrefix}/%`)),
+      ),
+    });
+
+    const user = request.user;
+    const branch = await git.createUserBranch(user.id);
+    const prefix = bundleGitPathPrefix(bundle.slug);
+    const gitFiles = await git.listFilesAtRef(branch, prefix);
+    const keepFiles = gitFiles.filter((gitPath) => {
+      const relative = gitPath.slice(prefix.length + 1);
+      const folder = folderPathFromGitKeep(relative);
+      return folder !== null && (folder === pathPrefix || folder.startsWith(`${pathPrefix}/`));
+    });
+
+    if (pages.length === 0 && keepFiles.length === 0) {
+      return reply.code(404).send({ error: "Folder not found" });
+    }
+
+    function remapPath(oldPath: string): string {
+      if (oldPath === pathPrefix) return newPath;
+      return `${newPath}${oldPath.slice(pathPrefix.length)}`;
+    }
+
+    const moves = pages.map((page) => ({ page, nextPath: remapPath(page.path) }));
+
+    for (const { nextPath } of moves) {
+      const occupant = await db.query.pages.findFirst({
+        where: and(
+          eq(schema.pages.bundleId, bundle.id),
+          eq(schema.pages.source, "raw"),
+          eq(schema.pages.path, nextPath),
+          eq(schema.pages.isDeleted, false),
+        ),
+        columns: { id: true, path: true },
+      });
+      if (occupant && !moves.some((m) => m.page.id === occupant.id)) {
+        return reply.code(409).send({
+          error: `A page already exists at “${nextPath}”`,
+        });
+      }
+    }
+
+    const keepMoves = keepFiles.map((gitPath) => {
+      const relative = gitPath.slice(prefix.length + 1);
+      const folder = folderPathFromGitKeep(relative)!;
+      const nextFolder = remapPath(folder);
+      return {
+        from: gitPath,
+        to: folderGitKeepPath(bundle.slug, nextFolder),
+        folder: nextFolder,
+      };
+    });
+
+    for (const move of keepMoves) {
+      if (gitFiles.includes(move.to) && !keepFiles.includes(move.to)) {
+        return reply.code(409).send({
+          error: `A folder already exists at “${move.folder}”`,
+        });
+      }
+    }
+
+    const permissionPaths = [
+      pathPrefix,
+      newPath,
+      ...moves.flatMap(({ page, nextPath }) => [page.path, nextPath]),
+      ...keepMoves.map((m) => m.folder),
+    ];
+    const permissions = await Promise.all(
+      [...new Set(permissionPaths)].map((path) =>
+        checkPermission(db, request.user, bundle, path, "edit"),
+      ),
+    );
+    if (permissions.some((allowed) => !allowed)) {
+      return reply.code(403).send({ error: "Forbidden" });
+    }
+
+    const gitChanges: { path: string; content: string | null | Uint8Array }[] = [];
+    for (const { page, nextPath } of moves) {
+      const content = await git.getSourcePageAtRef(branch, bundle.slug, page.path);
+      if (content === null) {
+        return reply.code(409).send({
+          error: `Page content not found on your branch: ${page.path}`,
+        });
+      }
+      gitChanges.push(
+        { path: pageGitPath(bundle.slug, page.path), content: null },
+        { path: legacyPageGitPath(bundle.slug, page.path), content: null },
+        { path: pageGitPath(bundle.slug, nextPath), content },
+      );
+    }
+    for (const move of keepMoves) {
+      gitChanges.push({ path: move.from, content: null }, { path: move.to, content: "" });
+    }
+
+    await git.writeAndCommit(
+      branch,
+      gitChanges,
+      `Rename folder: ${pathPrefix} -> ${newPath}`,
+      { name: user.displayName, email: user.email },
+    );
+
+    await db.transaction(async (tx) => {
+      for (const { page, nextPath } of moves) {
+        const occupant = await tx.query.pages.findFirst({
+          where: and(
+            eq(schema.pages.bundleId, bundle.id),
+            eq(schema.pages.source, "raw"),
+            eq(schema.pages.path, nextPath),
+          ),
+          columns: { id: true, isDeleted: true },
+        });
+        if (occupant) {
+          await tx.delete(schema.pages).where(eq(schema.pages.id, occupant.id));
+        }
+        await tx
+          .update(schema.pages)
+          .set({ path: nextPath })
+          .where(eq(schema.pages.id, page.id));
+        await tx.insert(schema.pages).values({
+          bundleId: bundle.id,
+          path: page.path,
+          title: page.title,
+          isDeleted: true,
+          redirectTo: nextPath,
+        });
+      }
+    });
+
+    return {
+      pathPrefix,
+      newPath,
+      movedPages: moves.length,
+      movedFolders: keepMoves.length,
+    };
   });
 }
