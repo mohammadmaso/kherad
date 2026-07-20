@@ -37,7 +37,7 @@ import {
 import { startIndexerRun } from "../agents/indexer/run";
 import { buildModel, loadAiSettings } from "../agents/settings";
 import { getBundleOrNull, isUuid } from "../lib/get-bundle";
-import { pageGitPath } from "../lib/wiki-paths";
+import { allocatePagePath, upsertRawPage } from "../lib/page-alloc";
 import { writePageContent } from "../lib/write-page-content";
 
 const MAX_AGENT_STEPS = 24;
@@ -57,28 +57,6 @@ function parseAggressiveness(value: unknown): Aggressiveness | null {
     (AGGRESSIVENESS_VALUES as readonly string[]).includes(value)
     ? (value as Aggressiveness)
     : null;
-}
-
-async function allocatePagePath(
-  db: Database,
-  bundleId: string,
-  basePath: string,
-): Promise<string> {
-  let candidate = basePath;
-  let suffix = 2;
-  while (true) {
-    const taken = await db.query.pages.findFirst({
-      where: and(
-        eq(schema.pages.bundleId, bundleId),
-        eq(schema.pages.source, "raw"),
-        eq(schema.pages.path, candidate),
-      ),
-      columns: { id: true },
-    });
-    if (!taken) return candidate;
-    candidate = `${basePath}-${suffix}`;
-    suffix += 1;
-  }
 }
 
 function sessionTitleFrom(goal: string | null | undefined, message?: UIMessage): string {
@@ -567,6 +545,25 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
     return toSessionResponse(updated!);
   });
 
+  server.delete<{ Params: { sessionId: string } }>(
+    "/agents/sessions/:sessionId",
+    async (request, reply) => {
+      if (!(await requireAgentAccess(db, request.user, reply))) return;
+      const user = request.user!;
+      const session = await loadOwnedSession(db, request.params.sessionId, user.id, user.isAdmin);
+      if (!session) {
+        return reply.code(404).send({ error: "Session not found" });
+      }
+
+      const [deleted] = await db
+        .delete(schema.agentSessions)
+        .where(eq(schema.agentSessions.id, session.id))
+        .returning({ id: schema.agentSessions.id });
+
+      return { deleted: deleted!.id };
+    },
+  );
+
   server.post<{ Params: { sessionId: string } }>(
     "/agents/sessions/:sessionId/uploads",
     async (request, reply) => {
@@ -971,7 +968,18 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
 
   server.post<{
     Params: { sessionId: string };
-    Body: { bundleId: string; path?: string; title: string };
+    Body: {
+      bundleId: string;
+      path?: string;
+      title: string;
+      /**
+       * When the resolved path already has a live page:
+       * - `update` — commit the draft onto that same page
+       * - `create` — allocate a free path (`path-2`, …) and create a new page
+       * Omit to update when the path matches, otherwise create.
+       */
+      ifExists?: "update" | "create";
+    };
   }>("/agents/sessions/:sessionId/import", async (request, reply) => {
     if (!(await requireAgentAccess(db, request.user, reply))) return;
     const user = request.user!;
@@ -999,25 +1007,67 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
     if (basePath === null) {
       return reply.code(400).send({ error: "Invalid path" });
     }
-    const path = await allocatePagePath(db, bundle.id, basePath);
+
+    const existing = await db.query.pages.findFirst({
+      where: and(
+        eq(schema.pages.bundleId, bundle.id),
+        eq(schema.pages.source, "raw"),
+        eq(schema.pages.path, basePath),
+        eq(schema.pages.isDeleted, false),
+      ),
+    });
+
+    const ifExists =
+      request.body.ifExists === "create" || request.body.ifExists === "update"
+        ? request.body.ifExists
+        : existing
+          ? "update"
+          : "create";
+
+    const updating = Boolean(existing) && ifExists === "update";
+    const path = updating
+      ? basePath
+      : existing
+        ? await allocatePagePath(db, bundle.id, basePath)
+        : basePath;
+    const remapped = !updating && path !== basePath;
 
     const allowed = await checkPermission(db, user, bundle, path, "edit");
     if (!allowed) {
       return reply.code(403).send({ error: "Forbidden" });
     }
 
-    const branch = await git.createUserBranch(user.id);
-    await git.writeAndCommit(
-      branch,
-      [{ path: pageGitPath(bundle.slug, path), content: draft }],
-      `Import agent draft: ${path}`,
-      { name: user.displayName, email: user.email },
-    );
+    let page: typeof schema.pages.$inferSelect;
+    let branch: string;
 
-    const [page] = await db
-      .insert(schema.pages)
-      .values({ bundleId: bundle.id, path, title: title.trim(), isDeleted: false })
-      .returning();
+    if (updating && existing) {
+      const written = await writePageContent(
+        git,
+        bundle,
+        existing,
+        draft,
+        user,
+        `Agent import (update): ${path}`,
+      );
+      branch = written.branch;
+      const [updated] = await db
+        .update(schema.pages)
+        .set({ title: title.trim() })
+        .where(eq(schema.pages.id, existing.id))
+        .returning();
+      page = updated!;
+    } else {
+      const written = await writePageContent(
+        git,
+        bundle,
+        { path },
+        draft,
+        user,
+        `Agent import (new page): ${path}`,
+      );
+      branch = written.branch;
+      page = (await upsertRawPage(db, bundle.id, path, title.trim()))!;
+    }
 
     await db
       .update(schema.agentSessions)
@@ -1061,8 +1111,16 @@ export async function agentSessionRoutes(server: FastifyInstance, db: Database, 
       }
     }
 
-    reply.code(201);
-    return { page, compile, branch };
+    reply.code(updating ? 200 : 201);
+    return {
+      page,
+      compile,
+      branch,
+      created: !updating,
+      remapped,
+      requestedPath: basePath,
+      path,
+    };
   });
 
   // Bundles the caller can attach / import into (view for context, edit for import).

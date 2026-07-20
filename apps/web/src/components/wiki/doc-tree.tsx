@@ -4,12 +4,7 @@ import { ChevronRightIcon, FileTextIcon } from "lucide-react";
 import Link from "next/link";
 import { type ReactNode, useState } from "react";
 
-import type { WikiNavNode } from "@/lib/page-tree";
-
-function nodeLabel(node: WikiNavNode): string {
-  if (node.page) return node.page.title;
-  return node.name.replace(/[-_]+/g, " ").replace(/^\p{L}/u, (c) => c.toUpperCase());
-}
+import { isFolderNode, labelFor, type WikiNavNode } from "@/lib/page-tree";
 
 function DocTreeNode({
   node,
@@ -23,7 +18,7 @@ function DocTreeNode({
   renderActions?: (node: WikiNavNode) => ReactNode;
 }) {
   const [open, setOpen] = useState(true);
-  const isFolder = node.children.length > 0;
+  const isFolder = isFolderNode(node);
 
   return (
     <li>
@@ -47,22 +42,26 @@ function DocTreeNode({
           </span>
         )}
 
-        {node.page ? (
-          <Link
-            href={linkFor(node)}
-            className="text-foreground hover:text-primary min-w-0 flex-1 truncate text-sm transition-colors duration-150"
-            dir="auto"
-          >
-            {nodeLabel(node)}
-          </Link>
-        ) : (
+        {isFolder ? (
           <button
             type="button"
             onClick={() => setOpen((v) => !v)}
             className="text-muted-foreground min-w-0 flex-1 truncate text-start text-sm"
           >
-            {nodeLabel(node)}
+            {labelFor(node)}
           </button>
+        ) : node.page ? (
+          <Link
+            href={linkFor(node)}
+            className="text-foreground hover:text-primary min-w-0 flex-1 truncate text-sm transition-colors duration-150"
+            dir="auto"
+          >
+            {labelFor(node)}
+          </Link>
+        ) : (
+          <span className="text-muted-foreground min-w-0 flex-1 truncate text-sm">
+            {labelFor(node)}
+          </span>
         )}
 
         {renderActions ? (
@@ -97,7 +96,7 @@ export function DocTree({
   emptyMessage,
 }: {
   tree: WikiNavNode[];
-  /** Href for a leaf node's primary link. */
+  /** Href for a leaf document's primary link. */
   linkFor: (node: WikiNavNode) => string;
   /** Optional secondary actions shown next to a node on hover (pages and folders). */
   renderActions?: (node: WikiNavNode) => ReactNode;

@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: kherad
     ports:
-      - "54322:5432"
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -50,7 +50,7 @@ services:
       WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
       API_PUBLIC_URL: ${API_PUBLIC_URL:-http://localhost:4000}
     ports:
-      - "4001:4000"
+      - "4000:4000"
     volumes:
       # Bind-mount so a locally-run web app (`pnpm --filter web dev`) and the
       # Docker API share one bare repo. A named volume here caused silent
@@ -64,6 +64,10 @@ services:
         condition: service_healthy
       ingest:
         condition: service_started
+    networks:
+      # default: reach postgres/ingest; webserver: reverse-proxy / public edge
+      - default
+      - webserver
 
   web:
     build:

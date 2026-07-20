@@ -10,7 +10,9 @@
  * through URL segments. Returns the trimmed path, or null if invalid.
  */
 export function normalizePagePath(rawPath: string): string | null {
-  const trimmed = rawPath.trim();
+  // Allow a leading/trailing slash in user input (" /guides/start/ ") but
+  // reject empty segments in the middle ("a//b").
+  const trimmed = rawPath.trim().replace(/^\/+|\/+$/g, "");
   if (!trimmed) return null;
   const segments = trimmed.split("/");
   if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
@@ -37,6 +39,42 @@ export function pagePathFromTitle(title: string): string {
     .replace(/^-+|-+$/g, "");
 
   return slug || "untitled";
+}
+
+/**
+ * Slugifies each segment of a typed folder/page path (spaces → hyphens, etc.).
+ * Returns null when the input is blank or invalid after slugify.
+ */
+export function slugifyPagePath(rawPath: string): string | null {
+  const trimmed = rawPath.trim().replace(/^\/+|\/+$/g, "");
+  if (!trimmed) return null;
+  const segments = trimmed.split("/").map((segment) => {
+    // Slugify one segment; flatten any accidental slashes left in the slug.
+    return pagePathFromTitle(segment).replaceAll("/", "-");
+  });
+  return normalizePagePath(segments.join("/"));
+}
+
+/**
+ * Resolves a create/import path from an optional folder, optional leaf path,
+ * and title. A typed folder always becomes a real path prefix under which the
+ * document (leaf or title slug) is created.
+ */
+export function resolveCreatePagePath(input: {
+  folder?: string;
+  path?: string;
+  title: string;
+}): string | null {
+  const folder = input.folder?.trim() ? slugifyPagePath(input.folder) : "";
+  if (input.folder?.trim() && folder === null) return null;
+
+  const leaf = input.path?.trim() ? slugifyPagePath(input.path) : null;
+  if (input.path?.trim() && leaf === null) return null;
+
+  if (folder && leaf) return normalizePagePath(`${folder}/${leaf}`);
+  if (folder) return normalizePagePath(`${folder}/${pagePathFromTitle(input.title)}`);
+  if (leaf) return leaf;
+  return normalizePagePath(pagePathFromTitle(input.title));
 }
 
 /**

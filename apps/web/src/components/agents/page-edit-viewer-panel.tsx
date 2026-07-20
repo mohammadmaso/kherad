@@ -40,10 +40,7 @@ type CreateModeProps = {
   editorResetKey?: number;
   bundleId?: string | null;
   onDraftChange: (markdown: string) => void;
-  onSaveDraft: () => void;
   onImport: () => void;
-  draftSaving?: boolean;
-  draftSaved?: boolean;
   onAddQuote?: (quote: TextQuote) => void;
 };
 
@@ -115,7 +112,7 @@ export function PageEditViewerPanel(props: AgentDocumentPanelProps) {
     try {
       await saveAgentPageEdit(props.sessionId, saveMarkdown);
       const mr = await submitForReview(bundleId);
-      setSuccessNote(t.agents.editSaveSuccess(mr.branchName));
+      setSuccessNote(t.agents.editSaveSuccess(mr.branchName, props.title));
       setManualMarkdown(null);
       props.onSaved?.();
     } catch (err) {
@@ -184,25 +181,14 @@ export function PageEditViewerPanel(props: AgentDocumentPanelProps) {
           </div>
 
           {isCreate ? (
-            <>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={props.draftSaving || !workingMarkdown.trim()}
-                onClick={() => props.onSaveDraft()}
-                className="active:scale-[0.97]"
-              >
-                {props.draftSaving ? t.common.saving : t.agents.draftSave}
-              </Button>
-              <Button
-                size="sm"
-                disabled={!workingMarkdown.trim()}
-                onClick={() => props.onImport()}
-                className="active:scale-[0.97]"
-              >
-                {t.agents.importButton}
-              </Button>
-            </>
+            <Button
+              size="sm"
+              disabled={!workingMarkdown.trim()}
+              onClick={() => props.onImport()}
+              className="active:scale-[0.97]"
+            >
+              {t.agents.importButton}
+            </Button>
           ) : (
             <Button
               size="sm"
@@ -237,12 +223,6 @@ export function PageEditViewerPanel(props: AgentDocumentPanelProps) {
       {viewMode === "edit" ? (
         <p className="text-muted-foreground border-border/60 border-b px-4 py-1.5 text-[0.6875rem]">
           {t.agents.editManualHint}
-        </p>
-      ) : null}
-
-      {isCreate && props.draftSaved ? (
-        <p className="text-muted-foreground border-border/60 border-b px-4 py-1.5 text-xs">
-          {t.agents.draftSaved}
         </p>
       ) : null}
 

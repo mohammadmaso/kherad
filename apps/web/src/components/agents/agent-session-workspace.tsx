@@ -27,7 +27,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, useEffectEvent } from "react";
 
-import { AskQuestionCard, extractAskQuestions } from "@/components/agents/ask-question-card";
+import { AskQuestionsBatch, extractAskQuestions } from "@/components/agents/ask-question-card";
 import { PageEditViewerPanel } from "@/components/agents/page-edit-viewer-panel";
 import {
   extractSectionEditProposals,
@@ -65,15 +65,19 @@ import {
   getToken,
   importAgentDraft,
   startMcpOauth,
+  submitForReview,
   updateAgentSession,
   uploadAgentFile,
   type AgentBundleOption,
   type AgentPageSection,
   type AgentSession,
   type AgentUpload,
+  type PageSummary,
 } from "@/lib/api-client";
 import { useI18n } from "@/lib/i18n/provider";
-import { pagePathFromTitle } from "@kherad/core/page-paths";
+import { resolveCreatePagePath } from "@kherad/core/page-paths";
+import { existingFolderPaths } from "@/lib/page-tree";
+import { PagePathFields } from "@/components/wiki/page-path-fields";
 
 // The specialist researches across bundles, so its picker offers pages from
 // every viewable bundle — capped to keep the lazy fetch bounded.
@@ -98,17 +102,19 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
   const [quotes, setQuotes] = useState<TextQuote[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const [draftSaving, setDraftSaving] = useState(false);
-  const [draftSaved, setDraftSaved] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importBundleId, setImportBundleId] = useState("");
   const [importTitle, setImportTitle] = useState("");
+  const [importFolder, setImportFolder] = useState("");
   const [importPath, setImportPath] = useState("");
+  const [importIfExists, setImportIfExists] = useState<"update" | "create">("update");
+  const [importBundlePages, setImportBundlePages] = useState<PageSummary[]>([]);
   const [importResult, setImportResult] = useState<{
     pageId: string;
     bundleId: string;
     compileNote: string | null;
+    successNote: string;
   } | null>(null);
   const [answeredToolKeys, setAnsweredToolKeys] = useState<Set<string>>(new Set());
   const [decidedEditKeys, setDecidedEditKeys] = useState<Set<string>>(new Set());
@@ -276,7 +282,6 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
     queueMicrotask(() => {
       setDraft(nextMarkdown);
       setDraftEditorKey((k) => k + 1);
-      setDraftSaved(false);
       setSession((prev) =>
         prev
           ? {
@@ -323,32 +328,28 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
     setUploads((prev) => prev.filter((u) => u.id !== uploadId));
   }
 
-  async function handleSaveDraft() {
-    setDraftSaving(true);
-    setDraftSaved(false);
-    setError(null);
-    try {
-      const updated = await updateAgentSession(sessionId, { draftMarkdown: draft });
-      setSession(updated);
-      setDraftSaved(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t.agents.loadFailed);
-    } finally {
-      setDraftSaving(false);
-    }
-  }
-
   async function handleImport() {
     setImporting(true);
     setError(null);
     try {
-      // Persist latest edits before import.
+      // Persist latest editor markdown, then write the page and open an MR.
       await updateAgentSession(sessionId, { draftMarkdown: draft });
+      const resolvedPath = resolveCreatePagePath({
+        folder: importFolder,
+        path: importPath,
+        title: importTitle.trim(),
+      });
+      if (!resolvedPath) {
+        setError(t.agents.loadFailed);
+        return;
+      }
       const result = await importAgentDraft(sessionId, {
         bundleId: importBundleId,
         title: importTitle.trim(),
-        path: importPath.trim() || undefined,
+        path: resolvedPath,
+        ifExists: pathConflict ? importIfExists : undefined,
       });
+      const mr = await submitForReview(result.page.bundleId);
       let compileNote: string | null = null;
       if (result.compile.status === "started") {
         compileNote = t.agents.compileStarted;
@@ -357,10 +358,16 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
       } else {
         compileNote = t.agents.compileFailed(result.compile.reason);
       }
+      const pageNote = result.created
+        ? result.remapped
+          ? t.agents.importSuccessRemapped(result.requestedPath, result.path)
+          : t.agents.importSuccessCreated(result.path)
+        : t.agents.importSuccessUpdated(result.path);
       setImportResult({
         pageId: result.page.id,
         bundleId: result.page.bundleId,
         compileNote,
+        successNote: t.agents.importSuccessWithReview(pageNote, mr.branchName),
       });
       setImportOpen(false);
       await reloadSession();
@@ -374,11 +381,57 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
   function openImport() {
     const titleGuess = session?.title && session.title !== labels.defaultTitle ? session.title : "";
     setImportTitle(titleGuess);
-    setImportPath(titleGuess ? pagePathFromTitle(titleGuess) : "");
+    setImportFolder("");
+    setImportPath("");
+    setImportIfExists("update");
     const editable = bundles.filter((b) => b.canEdit);
     if (!importBundleId && editable[0]) setImportBundleId(editable[0].id);
     setImportOpen(true);
   }
+
+  // Load live pages for the selected import bundle so we can detect path conflicts.
+  useEffect(() => {
+    if (!importOpen || !importBundleId) {
+      setImportBundlePages([]);
+      return;
+    }
+    let cancelled = false;
+    void fetchBundlePages(importBundleId)
+      .then((pages) => {
+        if (!cancelled) {
+          setImportBundlePages(pages.filter((p) => !p.isDeleted && !p.redirectTo));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setImportBundlePages([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [importOpen, importBundleId]);
+
+  const importExistingFolders = useMemo(
+    () => existingFolderPaths(importBundlePages),
+    [importBundlePages],
+  );
+
+  const resolvedImportPath = useMemo(() => {
+    if (!importTitle.trim()) return "";
+    return (
+      resolveCreatePagePath({
+        folder: importFolder,
+        path: importPath,
+        title: importTitle.trim(),
+      }) ?? ""
+    );
+  }, [importFolder, importPath, importTitle]);
+
+  const conflictingPage = useMemo(() => {
+    if (!resolvedImportPath) return null;
+    return importBundlePages.find((p) => p.path === resolvedImportPath) ?? null;
+  }, [importBundlePages, resolvedImportPath]);
+
+  const pathConflict = Boolean(conflictingPage);
 
   if (!loaded) {
     return (
@@ -514,7 +567,7 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
 
       {importResult ? (
         <Alert>
-          <AlertTitle>{t.agents.importSuccess}</AlertTitle>
+          <AlertTitle>{importResult.successNote}</AlertTitle>
           <AlertDescription className="flex flex-col gap-2">
             {importResult.compileNote ? <span>{importResult.compileNote}</span> : null}
             <Button
@@ -628,22 +681,29 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
                           ) : null,
                         )
                       )}
-                      {isLastAssistant
-                        ? questions.map((q) => {
-                            const key = `${message.id}:${q.id}`;
-                            if (answeredToolKeys.has(key)) return null;
+                      {isLastAssistant && questions.length > 0
+                        ? (() => {
+                            const pending = questions.filter(
+                              (q) => !answeredToolKeys.has(`${message.id}:${q.key}`),
+                            );
+                            if (pending.length === 0) return null;
                             return (
-                              <AskQuestionCard
-                                key={key}
-                                question={q}
+                              <AskQuestionsBatch
+                                questions={pending}
                                 disabled={busy}
                                 onSubmit={(answer) => {
-                                  setAnsweredToolKeys((prev) => new Set(prev).add(key));
+                                  setAnsweredToolKeys((prev) => {
+                                    const next = new Set(prev);
+                                    for (const q of pending) {
+                                      next.add(`${message.id}:${q.key}`);
+                                    }
+                                    return next;
+                                  });
                                   void sendMessage({ text: answer });
                                 }}
                               />
                             );
-                          })
+                          })()
                         : null}
                       {isLastAssistant
                         ? sectionEdits.map((proposal) => {
@@ -763,13 +823,9 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
             draftMarkdown={draft}
             editorResetKey={draftEditorKey}
             bundleId={session.bundleId}
-            draftSaving={draftSaving}
-            draftSaved={draftSaved}
             onDraftChange={(md) => {
               setDraft(md);
-              setDraftSaved(false);
             }}
-            onSaveDraft={() => void handleSaveDraft()}
             onImport={openImport}
             onAddQuote={(quote) => {
               setQuotes((prev) => {
@@ -788,6 +844,7 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
             <DialogTitle>{t.agents.importTitle}</DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-3">
+            <p className="text-muted-foreground text-sm">{t.agents.importHint}</p>
             {editableBundles.length === 0 ? (
               <p className="text-muted-foreground text-sm">{t.agents.noEditBundles}</p>
             ) : (
@@ -812,23 +869,54 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
                   <Input
                     id="import-title"
                     value={importTitle}
-                    onChange={(e) => {
-                      setImportTitle(e.target.value);
-                      if (!importPath.trim()) {
-                        setImportPath(pagePathFromTitle(e.target.value));
-                      }
-                    }}
+                    onChange={(e) => setImportTitle(e.target.value)}
                   />
                 </div>
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="import-path">{t.agents.importPath}</Label>
-                  <Input
-                    id="import-path"
-                    value={importPath}
-                    onChange={(e) => setImportPath(e.target.value)}
-                    dir="ltr"
-                  />
-                </div>
+                <PagePathFields
+                  folder={importFolder}
+                  onFolderChange={setImportFolder}
+                  path={importPath}
+                  onPathChange={setImportPath}
+                  title={importTitle}
+                  existingFolders={importExistingFolders}
+                  labels={{
+                    pathFolderLabel: t.bundles.pathFolderLabel,
+                    pathFolderPlaceholder: t.bundles.pathFolderPlaceholder,
+                    pathFolderHint: t.bundles.pathFolderHint,
+                    pathDocLabel: t.bundles.pathDocLabel,
+                    pathDocPlaceholder: t.bundles.pathDocPlaceholder,
+                    pathParentRoot: t.bundles.pathParentRoot,
+                    pathAddSubfolder: t.bundles.pathAddSubfolder,
+                    pathCreatesPrefix: t.bundles.pathCreatesPrefix,
+                  }}
+                />
+                {conflictingPage ? (
+                  <div className="border-border bg-muted/40 flex flex-col gap-2 rounded-xl border p-3">
+                    <p className="text-sm leading-relaxed">
+                      {t.agents.importExistsNotice(conflictingPage.title, conflictingPage.path)}
+                    </p>
+                    <div className="flex flex-col gap-1.5" role="radiogroup" aria-label={t.agents.importHint}>
+                      <label className="flex cursor-pointer items-center gap-2 text-sm">
+                        <input
+                          type="radio"
+                          name="import-if-exists"
+                          checked={importIfExists === "update"}
+                          onChange={() => setImportIfExists("update")}
+                        />
+                        {t.agents.importIfExistsUpdate}
+                      </label>
+                      <label className="flex cursor-pointer items-center gap-2 text-sm">
+                        <input
+                          type="radio"
+                          name="import-if-exists"
+                          checked={importIfExists === "create"}
+                          onChange={() => setImportIfExists("create")}
+                        />
+                        {t.agents.importIfExistsCreate}
+                      </label>
+                    </div>
+                  </div>
+                ) : null}
               </>
             )}
           </div>
@@ -842,7 +930,13 @@ export function AgentSessionWorkspace({ sessionId }: { sessionId: string }) {
               }
               onClick={() => void handleImport()}
             >
-              {importing ? t.common.loading : t.agents.importSubmit}
+              {importing
+                ? t.common.loading
+                : pathConflict
+                  ? importIfExists === "update"
+                    ? t.agents.importSubmitUpdate
+                    : t.agents.importSubmitCreate
+                  : t.agents.importSubmit}
             </Button>
           </DialogFooter>
         </DialogContent>

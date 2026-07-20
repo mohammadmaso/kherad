@@ -15,10 +15,11 @@ import { Label } from "@kherad/ui/components/ui/label";
 import { ArrowLeft, PencilIcon, Trash2Icon, WaypointsIcon } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { CompilePanel } from "@/components/compile/compile-panel";
 import { DocTree } from "@/components/wiki/doc-tree";
+import { PagePathFields } from "@/components/wiki/page-path-fields";
 import {
   createPage,
   deleteFolder,
@@ -30,8 +31,8 @@ import {
   type OkfDocSummary,
   type PageSummary,
 } from "@/lib/api-client";
-import { pagePathFromTitle } from "@kherad/core/page-paths";
-import { buildTree, type WikiNavNode } from "@/lib/page-tree";
+import { resolveCreatePagePath } from "@kherad/core/page-paths";
+import { buildTree, existingFolderPaths, isFolderNode, type WikiNavNode } from "@/lib/page-tree";
 import { useI18n } from "@/lib/i18n/provider";
 
 type DeleteTarget =
@@ -55,13 +56,28 @@ export default function BundleDetailPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
+  const [parentPath, setParentPath] = useState("");
   const [path, setPath] = useState("");
   const [title, setTitle] = useState("");
-  const suggestedPath = title.trim() && !path.trim() ? pagePathFromTitle(title) : "";
+  const existingFolders = useMemo(() => existingFolderPaths(pages ?? []), [pages]);
 
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [deleteConfirmName, setDeleteConfirmName] = useState("");
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
+
+  function openCreateDialog() {
+    setParentPath("");
+    setPath("");
+    setTitle("");
+    setDialogOpen(true);
+  }
+
+  function closeCreateDialog() {
+    setDialogOpen(false);
+    setParentPath("");
+    setPath("");
+    setTitle("");
+  }
 
   const load = useCallback(async () => {
     const bundleRow = await fetchBundle(bundleId);
@@ -95,10 +111,17 @@ export default function BundleDetailPage() {
     setSubmitting(true);
     setError(null);
     try {
-      const page = await createPage(bundleId, { path, title });
-      setDialogOpen(false);
-      setPath("");
-      setTitle("");
+      const resolvedPath = resolveCreatePagePath({
+        folder: parentPath,
+        path,
+        title,
+      });
+      if (!resolvedPath) {
+        setError(t.bundles.createFailed);
+        return;
+      }
+      const page = await createPage(bundleId, { path: resolvedPath, title });
+      closeCreateDialog();
       router.push(`/bundles/${bundleId}/pages/${page.id}/edit`);
     } catch (err) {
       setError(err instanceof Error ? err.message : t.bundles.createFailed);
@@ -159,10 +182,10 @@ export default function BundleDetailPage() {
     deleteTarget?.kind === "page" ? deleteTarget.page.title : deleteTarget?.name;
 
   function renderSourceActions(node: WikiNavNode) {
-    const isFolder = node.children.length > 0;
+    const isFolder = isFolderNode(node);
     return (
       <>
-        {node.page ? (
+        {!isFolder && node.page ? (
           <Link
             href={`/bundles/${bundleId}/pages/${node.page.id}/edit`}
             className="text-muted-foreground hover:bg-muted/60 hover:text-foreground flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors duration-150"
@@ -244,7 +267,13 @@ export default function BundleDetailPage() {
             <p className="text-muted-foreground mt-2 max-w-md text-sm">{t.bundles.sourcesHint}</p>
           ) : null}
         </div>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <Dialog
+          open={dialogOpen}
+          onOpenChange={(open) => {
+            if (open) openCreateDialog();
+            else closeCreateDialog();
+          }}
+        >
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
@@ -271,11 +300,11 @@ export default function BundleDetailPage() {
             >
               {t.bundles.importDocument}
             </Button>
-            <Button size="sm" onClick={() => setDialogOpen(true)}>
+            <Button size="sm" onClick={openCreateDialog}>
               {bundle.mode === "llm_compiled" ? t.bundles.newSource : t.bundles.newDocument}
             </Button>
           </div>
-          <DialogContent>
+          <DialogContent className="flex flex-col gap-4">
             <DialogHeader>
               <DialogTitle>{t.bundles.newDocument}</DialogTitle>
             </DialogHeader>
@@ -290,24 +319,27 @@ export default function BundleDetailPage() {
                   placeholder={t.bundles.titlePlaceholder}
                 />
               </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="doc-path">{t.bundles.pathOptional}</Label>
-                <Input
-                  id="doc-path"
-                  value={path}
-                  onChange={(e) => setPath(e.target.value)}
-                  placeholder={suggestedPath || "getting-started"}
-                />
-                {suggestedPath ? (
-                  <p className="text-muted-foreground text-xs">
-                    {t.bundles.pathHintPrefix}{" "}
-                    <span className="font-mono">/{suggestedPath}</span>
-                  </p>
-                ) : null}
-              </div>
+              <PagePathFields
+                folder={parentPath}
+                onFolderChange={setParentPath}
+                path={path}
+                onPathChange={setPath}
+                title={title}
+                existingFolders={existingFolders}
+                labels={{
+                  pathFolderLabel: t.bundles.pathFolderLabel,
+                  pathFolderPlaceholder: t.bundles.pathFolderPlaceholder,
+                  pathFolderHint: t.bundles.pathFolderHint,
+                  pathDocLabel: t.bundles.pathDocLabel,
+                  pathDocPlaceholder: t.bundles.pathDocPlaceholder,
+                  pathParentRoot: t.bundles.pathParentRoot,
+                  pathAddSubfolder: t.bundles.pathAddSubfolder,
+                  pathCreatesPrefix: t.bundles.pathCreatesPrefix,
+                }}
+              />
             </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setDialogOpen(false)}>
+            <DialogFooter className="mt-0">
+              <Button variant="outline" onClick={closeCreateDialog}>
                 {t.common.cancel}
               </Button>
               <Button disabled={submitting || !title.trim()} onClick={handleCreate}>

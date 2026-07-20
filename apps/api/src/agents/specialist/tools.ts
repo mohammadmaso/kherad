@@ -134,9 +134,11 @@ export function createResearchTools(args: {
   const askQuestion = createTool({
     id: "ask_question",
     description:
-      "Present a structured question with selectable options (and optional free-text). After calling this, wait for the user's next message with their answer.",
+      "Present a structured question with selectable options (and optional free-text). You may call this multiple times in one turn for independent questions; the user answers them all at once. After your turn, wait for their reply.",
     inputSchema: z.object({
-      id: z.string().describe("Short stable id for this question, e.g. 'audience'"),
+      id: z
+        .string()
+        .describe("Short unique id for this question, e.g. 'audience' — must be unique among questions in the same turn"),
       prompt: z.string().describe("The question shown to the user"),
       options: z
         .array(z.string())
@@ -156,7 +158,7 @@ export function createResearchTools(args: {
         options,
         allowCustom,
         instruction:
-          "Stop and wait. The user will answer in their next message. Do not ask another structured question until they reply.",
+          "You may ask several structured questions in this same turn. After the turn ends, stop and wait — the user will reply with all answers in one message.",
       };
     },
   });
@@ -193,7 +195,7 @@ export function createSpecialistTools(args: {
   const proposeDocument = createTool({
     id: "propose_document",
     description:
-      "Propose the final markdown document for the user to edit and import into the wiki. Call once when the session has enough substance.",
+      "Propose the final markdown document for the user to review and import into the wiki (new page, or update of an existing path if they choose). Call once when the session has enough substance. Do not use this to silently replace an existing page the user only meant to edit — if they want in-place section edits, tell them to use Edit with agent on that page.",
     inputSchema: z.object({
       title: z.string().describe("Suggested document title"),
       markdown: z.string().describe("Full markdown body (no outer code fence)"),

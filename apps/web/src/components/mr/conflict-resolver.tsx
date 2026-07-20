@@ -435,7 +435,14 @@ function SideBySideDiff({
             "focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none",
           )}
         >
-          <span className="truncate text-[13px] font-medium tracking-[-0.01em]">{oursLabel}</span>
+          <span className="min-w-0">
+            <span className="block truncate text-[13px] font-medium tracking-[-0.01em]">
+              {oursLabel}
+            </span>
+            <span className="text-muted-foreground block text-[10px] font-medium tracking-wide uppercase">
+              {t.mr.acceptAllLeft}
+            </span>
+          </span>
           <span className="bg-rose-500/12 text-rose-700 dark:text-rose-300 shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold">
             −
           </span>
@@ -449,7 +456,14 @@ function SideBySideDiff({
             "focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none",
           )}
         >
-          <span className="truncate text-[13px] font-medium tracking-[-0.01em]">{theirsLabel}</span>
+          <span className="min-w-0">
+            <span className="block truncate text-[13px] font-medium tracking-[-0.01em]">
+              {theirsLabel}
+            </span>
+            <span className="text-muted-foreground block text-[10px] font-medium tracking-wide uppercase">
+              {t.mr.acceptAllRight}
+            </span>
+          </span>
           <span className="bg-emerald-500/12 text-emerald-700 dark:text-emerald-300 shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold">
             +
           </span>
@@ -540,12 +554,15 @@ function HunkCard({
   onChange,
   viewMode,
   t,
+  bulkAccept,
 }: {
   hunk: ReturnType<typeof conflictHunks>[number];
   resolution: HunkResolution | undefined;
   onChange: (resolution: HunkResolution | undefined) => void;
   viewMode: ViewMode;
   t: Dictionary;
+  /** When `key` bumps, apply this side to every change in the hunk. */
+  bulkAccept: { key: number; choice: "ours" | "theirs" } | null;
 }) {
   const [editing, setEditing] = useState(false);
   const [customDraft, setCustomDraft] = useState(resolution?.customText ?? hunk.ours);
@@ -566,6 +583,30 @@ function HunkCard({
 
   const allDecided =
     changeBlocks.length > 0 && changeBlocks.every((block) => choices[block.id] !== undefined);
+
+  function acceptAll(choice: "ours" | "theirs" | "both") {
+    setEditing(false);
+    setManualCustom(false);
+    if (isBinary) {
+      if (choice === "both") return;
+      onChange({ mode: choice });
+      return;
+    }
+    if (changeBlocks.length === 0) {
+      onChange({ mode: choice === "both" ? "ours" : choice });
+      return;
+    }
+    const next: Record<string, ChangeChoice> = {};
+    for (const block of changeBlocks) next[block.id] = choice;
+    setChoices(next);
+  }
+
+  useEffect(() => {
+    if (!bulkAccept) return;
+    acceptAll(bulkAccept.choice);
+    // Only react to bulk key bumps from the file toolbar.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bulkAccept?.key]);
 
   useEffect(() => {
     if (isBinary || editing || manualCustom) return;
@@ -590,13 +631,6 @@ function HunkCard({
   function choose(changeId: string, choice: ChangeChoice) {
     setManualCustom(false);
     setChoices((prev) => ({ ...prev, [changeId]: choice }));
-  }
-
-  function acceptAll(choice: "ours" | "theirs" | "both") {
-    setManualCustom(false);
-    const next: Record<string, ChangeChoice> = {};
-    for (const block of changeBlocks) next[block.id] = choice;
-    setChoices(next);
   }
 
   const isResolved = isBinary
@@ -718,7 +752,7 @@ function HunkCard({
               className="h-7 gap-1.5 text-xs"
               onClick={() => acceptAll("ours")}
             >
-              {t.mr.acceptAllCurrent}
+              {t.mr.acceptAllLeft}
             </Button>
             <Button
               size="sm"
@@ -726,7 +760,7 @@ function HunkCard({
               className="h-7 gap-1.5 text-xs"
               onClick={() => acceptAll("theirs")}
             >
-              {t.mr.acceptAllIncoming}
+              {t.mr.acceptAllRight}
             </Button>
             <Button
               size="sm"
@@ -780,7 +814,11 @@ export function ConflictResolver({
   const segments = useMemo(() => parseConflictMarkers(markerText), [markerText]);
   const hunks = useMemo(() => conflictHunks(segments), [segments]);
   const [resolutions, setResolutions] = useState<Record<string, HunkResolution | undefined>>({});
-  const [viewMode, setViewMode] = useState<ViewMode>("integrated");
+  const [viewMode, setViewMode] = useState<ViewMode>("side-by-side");
+  const [bulkAccept, setBulkAccept] = useState<{
+    key: number;
+    choice: "ours" | "theirs";
+  } | null>(null);
 
   const allResolved = hunks.length > 0 && hunks.every((hunk) => resolutions[hunk.id] !== undefined);
 
@@ -793,9 +831,35 @@ export function ConflictResolver({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allResolved, resolutions, segments]);
 
+  function acceptAllFromSide(choice: "ours" | "theirs") {
+    setBulkAccept((prev) => ({ key: (prev?.key ?? 0) + 1, choice }));
+  }
+
   return (
     <div className="flex flex-col gap-4 p-3 sm:p-4">
-      <div className="flex items-center justify-end">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-8 gap-1.5 border-rose-500/30 text-xs hover:bg-rose-500/[0.08] active:scale-[0.97]"
+            title={t.mr.acceptAllLeftHint}
+            onClick={() => acceptAllFromSide("ours")}
+          >
+            {t.mr.acceptAllLeft}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-8 gap-1.5 border-emerald-500/30 text-xs hover:bg-emerald-500/[0.08] active:scale-[0.97]"
+            title={t.mr.acceptAllRightHint}
+            onClick={() => acceptAllFromSide("theirs")}
+          >
+            {t.mr.acceptAllRight}
+          </Button>
+        </div>
         <div
           role="group"
           aria-label="Diff view"
@@ -845,6 +909,7 @@ export function ConflictResolver({
             }
             viewMode={viewMode}
             t={t}
+            bulkAccept={bulkAccept}
           />
         ),
       )}

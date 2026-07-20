@@ -1038,6 +1038,12 @@ export type AgentBundleOption = {
 export type AgentImportResult = {
   page: PageSummary;
   branch: string;
+  /** True when a new page row was created; false when an existing page was updated. */
+  created: boolean;
+  /** True when the requested path was taken and a free path (`path-2`, …) was allocated. */
+  remapped: boolean;
+  requestedPath: string;
+  path: string;
   compile:
     | { status: "started"; runId: string }
     | { status: "skipped"; reason: string }
@@ -1115,6 +1121,12 @@ export function updateAgentSession(
   });
 }
 
+export function deleteAgentSession(sessionId: string): Promise<{ deleted: string }> {
+  return request(`${API_URL}/agents/sessions/${sessionId}`, {
+    method: "DELETE",
+  });
+}
+
 export async function uploadAgentFile(sessionId: string, file: File): Promise<AgentUpload> {
   const token = getToken();
   const form = new FormData();
@@ -1142,7 +1154,12 @@ export function deleteAgentUpload(
 
 export function importAgentDraft(
   sessionId: string,
-  input: { bundleId: string; path?: string; title: string },
+  input: {
+    bundleId: string;
+    path?: string;
+    title: string;
+    ifExists?: "update" | "create";
+  },
 ): Promise<AgentImportResult> {
   return request(`${API_URL}/agents/sessions/${sessionId}/import`, {
     method: "POST",

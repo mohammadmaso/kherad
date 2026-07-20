@@ -7,6 +7,7 @@ import { notFound, redirect } from "next/navigation";
 import { WikiContent } from "@/components/wiki/wiki-content";
 import { getViewer } from "@/lib/auth";
 import { getDictionary } from "@/lib/i18n/get-dictionary";
+import { isFolderNode, labelFor } from "@/lib/page-tree";
 import { getWikiNav, getWikiNavForVersion, type WikiNavNode } from "@/lib/wiki-nav";
 import { resolveWikiPage } from "@/lib/wiki-render";
 
@@ -16,17 +17,14 @@ type Props = {
 };
 
 function countPages(node: WikiNavNode): number {
-  return (node.page ? 1 : 0) + node.children.reduce((sum, child) => sum + countPages(child), 0);
+  // Folders are not documents — only count leaf pages (and any page nested under).
+  const self = !isFolderNode(node) && node.page ? 1 : 0;
+  return self + node.children.reduce((sum, child) => sum + countPages(child), 0);
 }
 
-function nodeLabel(node: WikiNavNode): string {
-  if (node.page) return node.page.title;
-  return node.name.replace(/[-_]+/g, " ").replace(/^\p{L}/u, (c) => c.toUpperCase());
-}
-
-/** Section a folder-only node links to: its first descendant page, depth-first. */
+/** First descendant document; folders themselves are never treated as pages. */
 function firstPage(node: WikiNavNode): WikiNavNode | null {
-  if (node.page) return node;
+  if (!isFolderNode(node)) return node.page ? node : null;
   for (const child of node.children) {
     const found = firstPage(child);
     if (found) return found;
@@ -134,8 +132,8 @@ export default async function BundleIndexPage({ params, searchParams }: Props) {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {nav.tree.map((node) => {
-          const isFolder = node.children.length > 0;
-          const target = node.page ? node : firstPage(node);
+          const isFolder = isFolderNode(node);
+          const target = isFolder ? firstPage(node) : node;
           if (!target?.page) return null;
           return (
             <Link
@@ -152,7 +150,7 @@ export default async function BundleIndexPage({ params, searchParams }: Props) {
               </span>
               <span className="flex min-w-0 flex-col gap-0.5">
                 <span className="group-hover:text-primary truncate font-medium">
-                  {nodeLabel(node)}
+                  {labelFor(node)}
                 </span>
                 <span className="text-muted-foreground text-xs">
                   {isFolder ? t.wiki.pageCountInline(countPages(node)) : `/${node.path}`}

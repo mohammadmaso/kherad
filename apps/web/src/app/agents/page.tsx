@@ -3,12 +3,24 @@
 import { Alert, AlertDescription, AlertTitle } from "@kherad/ui/components/ui/alert";
 import { Badge } from "@kherad/ui/components/ui/badge";
 import { Button } from "@kherad/ui/components/ui/button";
-import { BriefcaseIcon, PlusIcon } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@kherad/ui/components/ui/dialog";
+import { BriefcaseIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
-import { fetchAgentsHub, getToken, type AgentSessionSummary } from "@/lib/api-client";
+import {
+  deleteAgentSession,
+  fetchAgentsHub,
+  getToken,
+  type AgentSessionSummary,
+} from "@/lib/api-client";
 import { useI18n } from "@/lib/i18n/provider";
 
 function statusLabel(
@@ -62,6 +74,9 @@ export default function AgentsPage() {
   const [error, setError] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -91,6 +106,22 @@ export default function AgentsPage() {
       cancelled = true;
     };
   }, [router, t.agents.loadFailed]);
+
+  async function handleDelete() {
+    if (!deleteId) return;
+    const id = deleteId;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteAgentSession(id);
+      setSessions((prev) => prev.filter((s) => s.id !== id));
+      setDeleteId(null);
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : t.agents.deleteFailed);
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   if (!loaded) {
     return (
@@ -162,44 +193,85 @@ export default function AgentsPage() {
         ) : (
           <ul className="grid gap-3 sm:grid-cols-2">
             {sessions.map((session) => (
-              <li key={session.id}>
+              <li
+                key={session.id}
+                className="border-border bg-card has-[a:hover]:bg-muted/30 has-[a:active]:scale-[0.99] group relative flex h-full flex-col gap-3 rounded-2xl border p-4 transition-[background-color,transform,box-shadow] duration-150 ease-out motion-reduce:transition-colors motion-reduce:has-[a:active]:scale-100"
+              >
                 <Link
                   href={`/agents/${session.id}`}
-                  className="border-border bg-card hover:bg-muted/30 group flex h-full flex-col gap-3 rounded-2xl border p-4 transition-[background-color,transform,box-shadow] duration-150 ease-out active:scale-[0.99] motion-reduce:transition-colors motion-reduce:active:scale-100"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="line-clamp-2 text-sm font-semibold tracking-tight group-hover:text-foreground">
-                      {session.title}
-                    </p>
-                    <Badge variant={statusVariant(session.status)} className="shrink-0">
+                  aria-label={session.title}
+                  className="absolute inset-0 z-0 rounded-2xl"
+                />
+                <div className="pointer-events-none relative z-10 flex items-start justify-between gap-2">
+                  <p className="line-clamp-2 text-sm font-semibold tracking-tight group-has-[a:hover]:text-foreground">
+                    {session.title}
+                  </p>
+                  <div className="pointer-events-auto flex shrink-0 items-center gap-1">
+                    <Badge variant={statusVariant(session.status)}>
                       {statusLabel(session.status, t)}
                     </Badge>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={t.common.remove}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setDeleteError(null);
+                        setDeleteId(session.id);
+                      }}
+                      className="text-muted-foreground hover:text-destructive"
+                    >
+                      <Trash2Icon className="size-3.5" />
+                    </Button>
                   </div>
-                  {session.goal ? (
-                    <p className="text-muted-foreground line-clamp-2 text-xs leading-relaxed">
-                      {session.goal}
-                    </p>
-                  ) : null}
-                  <div className="text-muted-foreground mt-auto flex flex-wrap items-center gap-2 text-xs">
-                    {session.role ? (
-                      <span className="bg-muted/60 rounded-md px-1.5 py-0.5 font-medium">
-                        {session.role}
-                      </span>
-                    ) : (
-                      <span className="bg-muted/60 rounded-md px-1.5 py-0.5">
-                        {t.agents.specialist}
-                      </span>
-                    )}
-                    <span className="ms-auto tabular-nums">
-                      {relativeTime(session.updatedAt, t)}
+                </div>
+                {session.goal ? (
+                  <p className="text-muted-foreground pointer-events-none relative z-10 line-clamp-2 text-xs leading-relaxed">
+                    {session.goal}
+                  </p>
+                ) : null}
+                <div className="text-muted-foreground pointer-events-none relative z-10 mt-auto flex flex-wrap items-center gap-2 text-xs">
+                  {session.role ? (
+                    <span className="bg-muted/60 rounded-md px-1.5 py-0.5 font-medium">
+                      {session.role}
                     </span>
-                  </div>
-                </Link>
+                  ) : (
+                    <span className="bg-muted/60 rounded-md px-1.5 py-0.5">
+                      {t.agents.specialist}
+                    </span>
+                  )}
+                  <span className="ms-auto tabular-nums">
+                    {relativeTime(session.updatedAt, t)}
+                  </span>
+                </div>
               </li>
             ))}
           </ul>
         )}
       </section>
+
+      <Dialog open={!!deleteId} onOpenChange={(open) => !open && setDeleteId(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t.agents.deleteSession}</DialogTitle>
+          </DialogHeader>
+          <p className="text-muted-foreground text-sm">{t.agents.deleteConfirm}</p>
+          {deleteError ? (
+            <Alert variant="destructive">
+              <AlertTitle>{t.common.error}</AlertTitle>
+              <AlertDescription>{deleteError}</AlertDescription>
+            </Alert>
+          ) : null}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteId(null)} disabled={deleting}>
+              {t.common.cancel}
+            </Button>
+            <Button variant="destructive" onClick={() => void handleDelete()} disabled={deleting}>
+              {t.common.remove}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -1,7 +1,9 @@
 export {
   normalizePagePath,
   pagePathFromTitle,
+  resolveCreatePagePath,
   resolvePagePath,
+  slugifyPagePath,
 } from "../page-paths";
 
 /** Repo layout: source pages live under `/raw/<bundle-slug>/…`; compiled OKF under `/okf/<bundle-slug>/…`. */

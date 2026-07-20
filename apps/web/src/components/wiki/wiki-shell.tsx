@@ -18,6 +18,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { BundleChat } from "@/components/chat/bundle-chat";
 import type { WikiNavNode } from "@/lib/wiki-nav";
+import { isFolderNode, labelFor } from "@/lib/page-tree";
 import { useI18n } from "@/lib/i18n/provider";
 
 type Bundle = {
@@ -43,15 +44,10 @@ function nodeHref(slug: string, node: WikiNavNode): string {
   return `/wiki/${slug}/${node.path}`;
 }
 
-function nodeLabel(node: WikiNavNode): string {
-  if (node.page) return node.page.title;
-  return node.name.replace(/[-_]+/g, " ").replace(/^\p{L}/u, (c) => c.toUpperCase());
-}
-
 /** Every folder path in the tree — the sidebar starts fully expanded. */
 function allFolderPaths(nodes: WikiNavNode[], into: string[] = []): string[] {
   for (const node of nodes) {
-    if (node.children.length > 0) {
+    if (isFolderNode(node)) {
       into.push(node.path);
       allFolderPaths(node.children, into);
     }
@@ -88,9 +84,9 @@ function TreeNode({
   onToggle: (path: string) => void;
 }) {
   const { t } = useI18n();
-  const isFolder = node.children.length > 0;
+  const isFolder = isFolderNode(node);
   const isOpen = expanded.has(node.path);
-  const isActive = node.page !== null && pathname === nodeHref(slug, node);
+  const isActive = !isFolder && node.page !== null && pathname === nodeHref(slug, node);
 
   const rowClass = `group flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-sm transition-colors duration-150 ${
     isActive
@@ -101,7 +97,7 @@ function TreeNode({
   const chevron = isFolder ? (
     <button
       type="button"
-      aria-label={isOpen ? t.wiki.collapse(nodeLabel(node)) : t.wiki.expand(nodeLabel(node))}
+      aria-label={isOpen ? t.wiki.collapse(labelFor(node)) : t.wiki.expand(labelFor(node))}
       aria-expanded={isOpen}
       onClick={() => onToggle(node.path)}
       className="text-muted-foreground hover:bg-muted hover:text-foreground flex size-5 shrink-0 items-center justify-center rounded transition-colors duration-150"
@@ -118,25 +114,25 @@ function TreeNode({
   return (
     <li>
       <div className="flex items-center gap-0.5">
-        {node.page ? (
-          <Link
-            href={nodeHref(slug, node) + suffix}
-            className={rowClass}
-            aria-current={isActive ? "page" : undefined}
-          >
-            {chevron}
-            <span className="truncate">{nodeLabel(node)}</span>
-          </Link>
-        ) : (
+        {isFolder ? (
           <button
             type="button"
             onClick={() => onToggle(node.path)}
             className={`${rowClass} text-start`}
           >
             {chevron}
-            <span className="truncate">{nodeLabel(node)}</span>
+            <span className="truncate">{labelFor(node)}</span>
           </button>
-        )}
+        ) : node.page ? (
+          <Link
+            href={nodeHref(slug, node) + suffix}
+            className={rowClass}
+            aria-current={isActive ? "page" : undefined}
+          >
+            {chevron}
+            <span className="truncate">{labelFor(node)}</span>
+          </Link>
+        ) : null}
       </div>
       {isFolder ? (
         <div

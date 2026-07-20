@@ -5,7 +5,7 @@ import { Button } from "@kherad/ui/components/ui/button";
 import { Input } from "@kherad/ui/components/ui/input";
 import { Label } from "@kherad/ui/components/ui/label";
 import { Select } from "@kherad/ui/components/ui/select";
-import { pagePathFromTitle } from "@kherad/core/page-paths";
+import { resolveCreatePagePath } from "@kherad/core/page-paths";
 import {
   ArrowLeft,
   AudioLinesIcon,
@@ -24,10 +24,12 @@ import { Editor } from "@/components/editor/editor";
 import { AudioWaveformPlayer } from "@/components/ingest/audio-waveform-player";
 import { FilePreview } from "@/components/ingest/file-preview";
 import { VoiceRecorder } from "@/components/ingest/voice-recorder";
+import { PagePathFields } from "@/components/wiki/page-path-fields";
 import {
   commitIngestDocument,
   convertIngestDocument,
   fetchBundle,
+  fetchBundlePages,
   fetchMyBundles,
   fetchOcrStatus,
   fetchSttStatus,
@@ -37,6 +39,7 @@ import {
   type AdminBundle,
   type IngestPageImage,
 } from "@/lib/api-client";
+import { existingFolderPaths } from "@/lib/page-tree";
 import { useI18n } from "@/lib/i18n/provider";
 
 type Step = "upload" | "edit" | "place";
@@ -160,9 +163,11 @@ export function IngestWizard({
   const [editorKey, setEditorKey] = useState(0);
 
   const [title, setTitle] = useState("");
+  const [folder, setFolder] = useState("");
   const [path, setPath] = useState("");
   const [aiSuggested, setAiSuggested] = useState(false);
-  const suggestedPath = title.trim() && !path.trim() ? pagePathFromTitle(title) : "";
+  const [bundlePages, setBundlePages] = useState<{ path: string }[]>([]);
+  const existingFolders = useMemo(() => existingFolderPaths(bundlePages), [bundlePages]);
 
   useEffect(() => {
     let cancelled = false;
@@ -220,6 +225,26 @@ export function IngestWizard({
       cancelled = true;
     };
   }, [bundleId, t.bundles.loadFailed]);
+
+  useEffect(() => {
+    if (!bundleId) {
+      setBundlePages([]);
+      return;
+    }
+    let cancelled = false;
+    void fetchBundlePages(bundleId)
+      .then((pages) => {
+        if (!cancelled) {
+          setBundlePages(pages.filter((p) => !p.isDeleted && !p.redirectTo));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setBundlePages([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bundleId]);
 
   useEffect(() => {
     return () => {
@@ -326,7 +351,14 @@ export function IngestWizard({
             filename,
           });
           setTitle(suggestion.title);
-          setPath(suggestion.path);
+          const segments = suggestion.path.split("/").filter(Boolean);
+          if (segments.length > 1) {
+            setFolder(segments.slice(0, -1).join("/"));
+            setPath(segments[segments.length - 1] ?? "");
+          } else {
+            setFolder("");
+            setPath(suggestion.path);
+          }
           setAiSuggested(true);
         } catch {
           if (!title.trim()) setTitle(titleHint || filename);
@@ -347,9 +379,19 @@ export function IngestWizard({
     setBusy(true);
     setError(null);
     try {
+      const resolvedPath = resolveCreatePagePath({
+        folder,
+        path,
+        title: title.trim(),
+      });
+      if (!resolvedPath) {
+        setError(t.ingest.commitFailed);
+        setBusy(false);
+        return;
+      }
       const page = await commitIngestDocument(bundleId, {
         title: title.trim(),
-        path: path.trim() || suggestedPath,
+        path: resolvedPath,
         markdown,
         ...(jobId ? { jobId } : {}),
       });
@@ -680,20 +722,24 @@ export function IngestWizard({
               placeholder={t.bundles.titlePlaceholder}
             />
           </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ingest-path">{t.bundles.pathOptional}</Label>
-            <Input
-              id="ingest-path"
-              value={path}
-              onChange={(e) => setPath(e.target.value)}
-              placeholder={suggestedPath || "getting-started"}
-            />
-            {suggestedPath ? (
-              <p className="text-muted-foreground text-xs">
-                {t.bundles.pathHintPrefix} <span className="font-mono">/{suggestedPath}</span>
-              </p>
-            ) : null}
-          </div>
+          <PagePathFields
+            folder={folder}
+            onFolderChange={setFolder}
+            path={path}
+            onPathChange={setPath}
+            title={title}
+            existingFolders={existingFolders}
+            labels={{
+              pathFolderLabel: t.bundles.pathFolderLabel,
+              pathFolderPlaceholder: t.bundles.pathFolderPlaceholder,
+              pathFolderHint: t.bundles.pathFolderHint,
+              pathDocLabel: t.bundles.pathDocLabel,
+              pathDocPlaceholder: t.bundles.pathDocPlaceholder,
+              pathParentRoot: t.bundles.pathParentRoot,
+              pathAddSubfolder: t.bundles.pathAddSubfolder,
+              pathCreatesPrefix: t.bundles.pathCreatesPrefix,
+            }}
+          />
           <div className="flex items-center gap-2 pt-1">
             <Button variant="outline" disabled={busy} onClick={() => setStep("edit")}>
               {t.ingest.back}
